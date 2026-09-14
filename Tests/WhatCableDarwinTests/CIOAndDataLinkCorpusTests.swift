@@ -33,6 +33,19 @@ struct CIOAndDataLinkCorpusTests {
             .appendingPathComponent("research/customer-probes")
     }()
 
+    /// Every folder under the corpus root, sorted. Empty when the research
+    /// tree is not linked, which callers must treat as "tested nothing".
+    private static func allProbeFolders() -> [String] {
+        guard let entries = try? FileManager.default
+            .contentsOfDirectory(atPath: probeRoot.path) else { return [] }
+        return entries.filter { entry in
+            var isDir: ObjCBool = false
+            let path = probeRoot.appendingPathComponent(entry).path
+            FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+            return isDir.boolValue
+        }.sorted()
+    }
+
     // MARK: - Probe file loader
 
     /// Load the "output" text from a numbered probe JSON inside a folder.
@@ -97,18 +110,41 @@ struct CIOAndDataLinkCorpusTests {
     }
 
     /// Convert a block body to a property dict.
-    /// Supports: `N (0xHEX)` -> Int, `"quoted"` -> String, true/false -> Bool.
+    /// Supports: `N (0xHEX)` -> Int, `"quoted"` -> String, true/false -> Bool,
+    /// `{ ... }` -> NSDictionary of the nested scalars, `[ ... ]` -> NSArray
+    /// of the quoted strings (mirroring what IOKit hands the watcher).
     private static func parseProperties(body: String, indent: String) -> [String: Any] {
         var props: [String: Any] = [:]
         let deeper = indent + " "
-        for line in body.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = String(line)
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var index = 0
+        while index < lines.count {
+            let s = lines[index]
+            index += 1
             guard s.hasPrefix(indent), !s.hasPrefix(deeper) else { continue }
             let stripped = String(s.dropFirst(indent.count))
             guard let colonRange = stripped.range(of: ": ") else { continue }
             let key = String(stripped[..<colonRange.lowerBound])
             let valStr = String(stripped[colonRange.upperBound...])
-            if valStr == "true" {
+            if valStr == "{" || valStr == "[" {
+                let closer = indent + (valStr == "{" ? "}" : "]")
+                var nested: [String] = []
+                while index < lines.count, lines[index] != closer {
+                    nested.append(lines[index])
+                    index += 1
+                }
+                index += 1
+                if valStr == "{" {
+                    props[key] = NSDictionary(dictionary: parseProperties(
+                        body: nested.joined(separator: "\n"), indent: indent + "  "))
+                } else {
+                    props[key] = NSArray(array: nested.compactMap { line -> String? in
+                        guard let q1 = line.firstIndex(of: "\""),
+                              let q2 = line.lastIndex(of: "\""), q1 != q2 else { return nil }
+                        return String(line[line.index(after: q1)..<q2])
+                    })
+                }
+            } else if valStr == "true" {
                 props[key] = NSNumber(value: true)
             } else if valStr == "false" {
                 props[key] = NSNumber(value: false)
@@ -405,6 +441,113 @@ struct CIOAndDataLinkCorpusTests {
         )
         #expect(model != nil,
             "CIO has no hard gate key; absence of Active must not be treated as inactive")
+    }
+
+    // MARK: - (a9) CIO peer fields: Metadata presence and provisioned tunnels
+
+    @Test("CIO peer fields: empty Metadata reads hasPeerMetadata false")
+    func makeCIOCapabilityReadsEmptyMetadata() {
+        let props: [String: Any] = [
+            "Active": NSNumber(value: true),
+            "Metadata": NSDictionary(),
+            "ParentBuiltInPortType": NSNumber(value: 2),
+            "ParentBuiltInPortNumber": NSNumber(value: 1),
+        ]
+        let model = TRMTransportWatcher.makeCIOCapability(
+            entryID: 1, read: { props[$0] }, hpmControllerUUID: nil)
+        #expect(model?.hasPeerMetadata == false)
+    }
+
+    @Test("CIO peer fields: Metadata with one key reads hasPeerMetadata true")
+    func makeCIOCapabilityReadsPopulatedMetadata() {
+        let props: [String: Any] = [
+            "Active": NSNumber(value: true),
+            "Metadata": NSDictionary(dictionary: ["Device Model Name": "Dock"]),
+            "ParentBuiltInPortType": NSNumber(value: 2),
+            "ParentBuiltInPortNumber": NSNumber(value: 1),
+        ]
+        let model = TRMTransportWatcher.makeCIOCapability(
+            entryID: 1, read: { props[$0] }, hpmControllerUUID: nil)
+        #expect(model?.hasPeerMetadata == true)
+    }
+
+    @Test("CIO peer fields: Metadata absent reads hasPeerMetadata nil")
+    func makeCIOCapabilityReadsAbsentMetadata() {
+        let props: [String: Any] = [
+            "Active": NSNumber(value: true),
+            "ParentBuiltInPortType": NSNumber(value: 2),
+            "ParentBuiltInPortNumber": NSNumber(value: 1),
+        ]
+        let model = TRMTransportWatcher.makeCIOCapability(
+            entryID: 1, read: { props[$0] }, hpmControllerUUID: nil)
+        #expect(model != nil)
+        #expect(model?.hasPeerMetadata == nil)
+    }
+
+    @Test("CIO peer fields: TunneledTransportsProvisioned round-trips, empty and populated")
+    func makeCIOCapabilityReadsProvisionedTunnels() {
+        func model(_ value: Any?) -> CIOCableCapability? {
+            var props: [String: Any] = [
+                "Active": NSNumber(value: true),
+                "ParentBuiltInPortType": NSNumber(value: 2),
+                "ParentBuiltInPortNumber": NSNumber(value: 1),
+            ]
+            if let value { props["TunneledTransportsProvisioned"] = value }
+            return TRMTransportWatcher.makeCIOCapability(
+                entryID: 1, read: { props[$0] }, hpmControllerUUID: nil)
+        }
+        #expect(model(NSArray(array: ["USB3", "PCIe"]))?.tunneledTransportsProvisioned == ["USB3", "PCIe"])
+        #expect(model(NSArray())?.tunneledTransportsProvisioned == [])
+        let absent = model(nil)
+        #expect(absent != nil)
+        #expect(absent?.tunneledTransportsProvisioned == nil)
+    }
+
+    /// Whole-corpus sweep, probe 17 only: both peer keys are present on
+    /// every active CIO row, and the Mac-to-Mac signature (empty Metadata,
+    /// nothing provisioned) is exactly the six folders named below. Two
+    /// independent parsers (this one and a Python pass over the same probes)
+    /// agree on the six; the task brief listed five, so the count here is
+    /// the measured one, not the quoted one.
+    @Test("CIO peer fields: every active row has both keys; empty-peer signature is exactly 6 folders (probe 17)")
+    func cioPeerFieldsAcrossCorpus() {
+        let folders = Self.allProbeFolders()
+        guard !folders.isEmpty else {
+            Issue.record("Corpus root absent at \(Self.probeRoot.path); run scripts/link-research.sh. This sweep tested nothing.")
+            return
+        }
+
+        var swept = 0
+        var missingMetadata: [String] = []
+        var missingProvisioned: [String] = []
+        var emptyPeer: [String] = []
+
+        for folder in folders {
+            guard let text = Self.loadProbeText(folder: folder, probe: "17_deep_property_dump") else { continue }
+            for (i, props) in Self.extractCIOBlocks(text: text).enumerated() {
+                guard let model = TRMTransportWatcher.makeCIOCapability(
+                    entryID: UInt64(i), read: { props[$0] }, hpmControllerUUID: nil)
+                else { continue }
+                swept += 1
+                if model.hasPeerMetadata == nil { missingMetadata.append("\(folder)#\(i)") }
+                if model.tunneledTransportsProvisioned == nil { missingProvisioned.append("\(folder)#\(i)") }
+                if model.hasPeerMetadata == false, model.tunneledTransportsProvisioned == [] {
+                    emptyPeer.append(folder)
+                }
+            }
+        }
+
+        #expect(swept > 0, "No active CIO rows swept; the corpus is linked but empty")
+        #expect(missingMetadata.isEmpty, "Active rows without Metadata: \(missingMetadata)")
+        #expect(missingProvisioned.isEmpty, "Active rows without TunneledTransportsProvisioned: \(missingProvisioned)")
+        #expect(emptyPeer == [
+            "m4_macos26.5.2_g",
+            "m4_macos26.5_b",
+            "m4_macos27.0_k",
+            "m4pro_macos26.6.2_d",
+            "m5pro_macos26.5.2_b",
+            "m5pro_macos27.0_d",
+        ], "Empty-peer signature folders: \(emptyPeer)")
     }
 
     /// Corpus replay: the 4 real ports (re-derived and confirmed with two

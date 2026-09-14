@@ -124,6 +124,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 voies DP (pas d'USB3 avec la vidéo)";
 "Carrying DisplayPort video (%@)" = "Transport vidéo DisplayPort (%@)";
 "Connected device: %@" = "Appareil connecté : %@";
+"Connected device: another Mac" = "Appareil connecté : un autre Mac";
+"USB link only" = "Liaison USB uniquement";
 "Connected device: %@, %@ (%@)" = "Appareil connecté : %1$@, %2$@ (%3$@)";
 "Data" = "Données";
 "DisplayPort Alt Mode" = "Mode alternatif DisplayPort";
@@ -321,6 +323,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "Les éléments visibles prennent tous en charge %@ ou plus, mais le lien s'est établi plus lentement. Rebrancher le câble ou essayer un autre port peut aider.";
 "Running at full data speed (%@)" = "Fonctionne à pleine vitesse de données (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "Rien ne bride le lien : tous les éléments visibles prennent en charge cette vitesse.";
+"Linked to another Mac at %@" = "Connecté à un autre Mac à %@";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Le réseau Thunderbolt passe par cette liaison. La connexion USB à 480 Mbps qui l'accompagne est normale et ne transporte pas vos données.";
 "Cable is limiting data speed" = "Le câble limite la vitesse des données";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Le Mac et l'appareil peuvent atteindre %@, mais le câble ne transporte que %@. Un câble plus rapide débloquerait la pleine vitesse.";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Le Mac peut atteindre %1$@, mais le câble ne transporte que %2$@. Un câble plus rapide débloquerait la pleine vitesse.";

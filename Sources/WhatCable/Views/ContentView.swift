@@ -1468,6 +1468,7 @@ struct PortCard: View {
                 port: port,
                 thunderboltSwitches: thunderboltSwitches,
                 displayPorts: displayPorts,
+                cioCapability: cioCapability,
                 hubs: showHubs ? .all : .endpointsOnly
             )
             if !connectedRows.isEmpty {
@@ -1484,6 +1485,7 @@ struct PortCard: View {
                     port: port,
                     thunderboltSwitches: thunderboltSwitches,
                     displayPorts: displayPorts,
+                    cioCapability: cioCapability,
                     hubs: .all
                 )
                 let hiddenHubs = allRows.compactMap { $0.device?.id }

@@ -387,7 +387,8 @@ public enum TextFormatter {
             tunnelledDevices: structuralTunnelledDevices,
             port: port,
             thunderboltSwitches: thunderboltSwitches,
-            displayPorts: displayPorts
+            displayPorts: displayPorts,
+            cioCapability: cioCapability
         )
         if !connectedRows.isEmpty {
             out += "\n" + ANSI.wrap(ANSI.bold, String(localized: "Connected devices:", bundle: _coreLocalizedBundle)) + "\n"

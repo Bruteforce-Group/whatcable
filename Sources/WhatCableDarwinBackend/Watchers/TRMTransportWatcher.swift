@@ -277,7 +277,11 @@ public final class TRMTransportWatcher: ObservableObject {
             asymmetricModeSupported: (read("AsymmetricModeSupported") as? NSNumber)?.boolValue,
             legacyAdapter: (read("LegacyAdapter") as? NSNumber)?.boolValue,
             linkTrainingMode: (read("LinkTrainingMode") as? NSNumber)?.intValue,
-            hpmControllerUUID: hpmControllerUUID
+            hpmControllerUUID: hpmControllerUUID,
+            // Both keys are present on all 295 corpus CIO blocks (probe 17),
+            // so the nil branches below are only reached by synthetic tests.
+            hasPeerMetadata: (read("Metadata") as? NSDictionary).map { $0.count > 0 },
+            tunneledTransportsProvisioned: read("TunneledTransportsProvisioned") as? [String]
         )
     }
 

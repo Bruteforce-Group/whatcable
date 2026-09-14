@@ -867,14 +867,16 @@ struct DataLinkDiagnosticTests {
     @Test("Facts expose the resolved per-party numbers")
     func factsExposeResolvedNumbers() {
         // E-marker says 0.48 (USB 2.0), controller says 40 (TB4 class),
-        // host 40, device 10 (speedRaw 4), link active at 40 (TB).
+        // host 40, device 10 (speedRaw 4), link active at 10. The device
+        // sits at the active rate on purpose: a USB fallback figure below
+        // the lane is dropped from the facts, which is its own test.
         let diag = DataLinkDiagnostic(
             port: makePort(),
             identities: [cableEmarker(speedCode: 0)],   // 0.48
             devices: [device(speedRaw: 4)],              // 10
             usb3Transports: [],
             cio: cio(negotiatedLinkSpeed: 3),                     // 40
-            tbActiveGbps: 40,
+            tbActiveGbps: 10,
             hostMaxGbps: 40
         )
         guard let facts = diag?.facts else {
@@ -886,7 +888,7 @@ struct DataLinkDiagnosticTests {
         #expect(facts.cableGbps == 40)        // controller's figure
         #expect(facts.deviceGbps == 10)
         #expect(facts.hostGbps == 40)
-        #expect(facts.activeGbps == 40)
+        #expect(facts.activeGbps == 10)
         // A USB 2.0 speed field under a Thunderbolt link is not a
         // disagreement (CIO-semantics change); before it this read true.
         #expect(diag!.cableSignalConflict == false)
@@ -1188,11 +1190,12 @@ struct DataLinkDiagnosticTests {
 
     @Test("Falls back to USB device speed when no TB partner switch present")
     func fallsBackToUSBDeviceWithoutPartner() {
-        // Plain USB-C SSD: no TB partner, just a USB device at 10 Gbps.
-        // The USB device cap should still drive the verdict.
+        // Plain USB-C SSD: no TB partner, no TB link (CIO not active, so
+        // the active rate is the SSD's own 10 Gbps), just a USB device at
+        // 10 Gbps. The USB device cap should still drive the verdict.
         let host = hostSwitch(socketID: "1", supportedRaw: 0xE, activeSpeed: .usb4Tb4)
         let diag = DataLinkDiagnostic(
-            port: makePort(),
+            port: makePort(transportsActive: ["CC", "USB3"]),
             identities: [cableEmarker(speedCode: 3)],   // 40 Gbps cable
             devices: [device(speedRaw: 4)],              // 10 Gbps USB device
             usb3Transports: [usb3(signaling: 2)],        // active 10 Gbps
@@ -1242,8 +1245,10 @@ struct DataLinkDiagnosticTests {
         )
         // Partner attached to the *sibling* lane (port 9), not port 1.
         let siblingPartner = partnerSwitch(parent: root, parentLanePortNumber: 9, supportedRaw: 0xE)
+        // CIO is not active on this port: it holds a plain USB SSD, so the
+        // active rate is the SSD's 10 Gbps and its figure is comparable.
         let diag = DataLinkDiagnostic(
-            port: makePort(),                             // Port-USB-C@1 → socket "1"
+            port: makePort(transportsActive: ["CC", "USB3"]),  // Port-USB-C@1 → socket "1"
             identities: [],
             devices: [device(speedRaw: 4)],              // 10 Gbps USB device on this port
             usb3Transports: [usb3(signaling: 2)],
@@ -1376,13 +1381,14 @@ struct DataLinkDiagnosticTests {
         }
     }
 
-    @Test("A slow USB device tunnelled over a fast link is still the device figure")
-    func tunnelledUSBDeviceKeepsItsFigure() {
-        // The other side of the same line. A USB 2.0 keyboard behind a
-        // Thunderbolt dock really is 480 Mbps and the link really does run
-        // at 40 Gbps: the two do not contradict, because the keyboard is
-        // tunnelled rather than being the link's endpoint. Only a cap read
-        // off a Thunderbolt switch is guarded.
+    @Test("A 480 Mbps USB fallback figure under a 40 Gbps lane is not the link's endpoint")
+    func usbFallbackBelowActiveIsDropped() {
+        // No partner switch, so the device figure falls back to the fastest
+        // USB device on the port: a USB 2.0 endpoint at 480 Mbps. The lane
+        // demonstrably carried 40 Gbps, so that endpoint is not what this
+        // link is serving (a peer Mac's USB 2.0 interface is the corpus
+        // shape). The figure is dropped exactly as a self-refuting
+        // direct-partner cap is: out of the facts, out of the comparison.
         let host = hostSwitch(socketID: "1", supportedRaw: 0xE, activeSpeed: .usb4Tb4)
         let diag = DataLinkDiagnostic(
             port: makePort(),
@@ -1393,11 +1399,11 @@ struct DataLinkDiagnosticTests {
             thunderboltSwitches: [host],
             tbActiveGbps: 40
         )
-        guard case .deviceLimit(let d) = diag?.bottleneck else {
-            Issue.record("expected .deviceLimit from the USB fallback, got \(String(describing: diag?.bottleneck))")
-            return
+        #expect(diag?.facts.deviceGbps == nil,
+            "A dropped USB fallback figure must not be reported. Got: \(String(describing: diag?.facts.deviceGbps))")
+        if case .deviceLimit(let d) = diag?.bottleneck {
+            Issue.record("A \(d) Gbps USB fallback figure cannot limit a link measured at 40 Gbps")
         }
-        #expect(d == 0.48)
     }
 
     @Test("A 20 Gbps link on a Thunderbolt 3 device reads as running at full speed")
@@ -1610,8 +1616,10 @@ struct DataLinkDiagnosticTests {
         #expect(terminalForSocket1 == nil,
             "Socket 1 has no partner of its own; socket 9's chain must not be attributed to it. Got: \(String(describing: terminalForSocket1))")
 
+        // CIO is not active on this port (a plain USB SSD), so the active
+        // rate is the SSD's own 10 Gbps and its figure is comparable.
         let diag = DataLinkDiagnostic(
-            port: makePort(),
+            port: makePort(transportsActive: ["CC", "USB3"]),
             identities: [],
             devices: [device(speedRaw: 4)],   // 10 Gbps USB device on THIS port
             usb3Transports: [usb3(signaling: 2)],
@@ -2981,5 +2989,215 @@ struct DataLinkDiagnosticTests {
             Issue.record("a restriction on a tunnelled-only transport must not produce .blockedBySecurity")
         }
         #expect(diag == nil, "got: \(String(describing: diag?.bottleneck))")
+    }
+
+    // MARK: - Mac cabled to another Mac (host-to-host)
+
+    /// A CIO row as the watcher reads it on a Mac-to-Mac link: no peer
+    /// `Metadata`, nothing provisioned through the tunnel. The plain
+    /// `cio(negotiatedLinkSpeed:)` fixture leaves both fields nil.
+    private func hostToHostCIO(negotiatedLinkSpeed: Int) -> CIOCableCapability {
+        CIOCableCapability(
+            id: 3, portKey: "2/1",
+            cableGeneration: nil, negotiatedLinkSpeed: negotiatedLinkSpeed, generation: nil,
+            asymmetricModeSupported: nil, legacyAdapter: nil, linkTrainingMode: nil,
+            hpmControllerUUID: nil,
+            hasPeerMetadata: false,
+            tunneledTransportsProvisioned: []
+        )
+    }
+
+    /// The Apple USB 2.0 root device the peer exposes on this port.
+    private func applePeerDevice(productID: UInt16, productName: String) -> USBDevice {
+        USBDevice(
+            id: 20, locationID: 0x0110_0000,
+            vendorID: 0x05AC, productID: productID,
+            vendorName: "Apple Inc.", productName: productName, serialNumber: nil,
+            usbVersion: "2.00", speedRaw: 2,
+            busPowerMA: nil, currentMA: nil,
+            controllerPortName: "Port-USB-C@1",
+            rawProperties: [:]
+        )
+    }
+
+    /// Host root with one lane on socket "1" and no child switch: the
+    /// fabric a Mac-to-Mac link leaves behind.
+    private func hostRootOnly() -> IOThunderboltSwitch {
+        hostSwitch(socketID: "1", supportedRaw: 0xE, activeSpeed: .usb4Tb4)
+    }
+
+    @Test("Ticket shape: 80 Gbps cable and host, no switches, a 480 Mbps USB device is not the endpoint")
+    func ticketShapeIsFineNotDeviceLimit() {
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [cableEmarker(speedCode: 4)],
+            devices: [device(speedRaw: 2)],
+            usb3Transports: [],
+            cio: nil,
+            tbActiveGbps: 80,
+            hostMaxGbps: 80
+        )
+        #expect(diag?.facts.deviceGbps == nil,
+            "Got: \(String(describing: diag?.facts.deviceGbps))")
+        #expect(diag?.bottleneck == .fine(activeGbps: 80),
+            "Got: \(String(describing: diag?.bottleneck))")
+    }
+
+    @Test("MacBook Air peer on a 40 Gbps Mac with an 80 Gbps cable: linked to another Mac, not a host limit")
+    func macBookAirPeerReadsAsLinkedToAnotherMac() {
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [],
+            devices: [applePeerDevice(productID: 0x7307, productName: "Macbook Air")],
+            usb3Transports: [],
+            cio: hostToHostCIO(negotiatedLinkSpeed: 4),
+            thunderboltSwitches: [hostRootOnly()],
+            tbActiveGbps: 40,
+            hostMaxGbps: 40
+        )
+        // The controller's 80 sits above the 40 the lane carried, so the
+        // case is the non-confirming one: the wording is the same, but no
+        // consumer may read the cable's claim as delivered.
+        #expect(diag?.bottleneck == .unknownCable(activeGbps: 40),
+            "Got: \(String(describing: diag?.bottleneck))")
+        #expect(diag?.summary == "Linked to another Mac at 40 Gbps",
+            "Got: \(String(describing: diag?.summary))")
+        #expect(diag?.detail.hasPrefix("Thunderbolt networking") == true,
+            "Got: \(String(describing: diag?.detail))")
+        #expect(diag?.isWarning == false)
+    }
+
+    @Test("Vision Pro shares the CIO signature but is not a Mac")
+    func visionProIsNotDeviceLimitAndNotAnotherMac() {
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [],
+            devices: [applePeerDevice(productID: 0x12B1, productName: "Vision Pro")],
+            usb3Transports: [],
+            cio: hostToHostCIO(negotiatedLinkSpeed: 4),
+            thunderboltSwitches: [hostRootOnly()],
+            tbActiveGbps: 40,
+            hostMaxGbps: 40
+        )
+        if case .deviceLimit(let d) = diag?.bottleneck {
+            Issue.record("A \(d) Gbps USB fallback figure cannot limit a link measured at 40 Gbps")
+        }
+        #expect(diag?.summary.contains("another Mac") == false,
+            "Got: \(String(describing: diag?.summary))")
+    }
+
+    @Test("A cable at the floor between two Macs is not blamed either")
+    func cableLimitCollapsesOnHostToHost() {
+        // m1pro shape: controller reads 20, lane at 20, this Mac does 40.
+        // On a peer link the controller figure is the negotiated rate, not
+        // a floor on the cable, so the peer's ceiling must not read as a
+        // cable limit.
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [],
+            devices: [applePeerDevice(productID: 0x1902, productName: "MacBook Pro")],
+            usb3Transports: [],
+            cio: hostToHostCIO(negotiatedLinkSpeed: 2),
+            thunderboltSwitches: [hostRootOnly()],
+            tbActiveGbps: 20,
+            hostMaxGbps: 40
+        )
+        #expect(diag?.bottleneck == .fine(activeGbps: 20),
+            "Got: \(String(describing: diag?.bottleneck))")
+        #expect(diag?.summary == "Linked to another Mac at 20 Gbps",
+            "Got: \(String(describing: diag?.summary))")
+    }
+
+    @Test("Peer Mac with an 80 Gbps claim carried at 40: trust is not confirmed by data")
+    func peerMacClaimAboveLaneIsNotTrustConfirmed() {
+        // claimAboveFloorIsNotTrustConfirmed with a Mac on the far end. The
+        // cable claims 80 and has only ever been seen at 40, so the same
+        // amber holds: neither confirmed nor contradicted.
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [cableEmarker(speedCode: 4)],
+            devices: [applePeerDevice(productID: 0x7307, productName: "Macbook Air")],
+            usb3Transports: [],
+            cio: hostToHostCIO(negotiatedLinkSpeed: 4),
+            thunderboltSwitches: [hostRootOnly()],
+            tbActiveGbps: 40,
+            hostMaxGbps: 40
+        )
+        guard let diag else {
+            Issue.record("expected a diagnostic, got nil")
+            return
+        }
+        #expect(diag.facts.cableGbps == 80)
+        let behaviour = CableTrust.behaviour(
+            for: diag.bottleneck,
+            hasCableSpeedClaim: diag.facts.cableGbps != nil
+        )
+        #expect(behaviour.dataConfirmed == false,
+            "A peer-limited link must not confirm an untested 80 Gbps claim; got \(diag.bottleneck)")
+        #expect(behaviour.contradiction == false)
+        let delivery = SessionMonitor.DataDelivery.from(
+            diag.bottleneck,
+            hasCableSpeedClaim: diag.facts.cableGbps != nil
+        )
+        #expect(delivery != .confirmed, "Got: \(delivery)")
+    }
+
+    @Test("Peer Mac with the e-marker unread: the controller's 40 is the lane, not a cable limit")
+    func peerMacUnreadEmarkerIsNotCableLimit() {
+        // TB5 Mac to a TB4 Mac, e-marker not read. On a peer link the
+        // controller figure equals the trained lane, so a cable limit
+        // here would blame the cable for the other Mac's ceiling.
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [],
+            devices: [applePeerDevice(productID: 0x1905, productName: "Mac")],
+            usb3Transports: [],
+            cio: hostToHostCIO(negotiatedLinkSpeed: 3),
+            thunderboltSwitches: [hostRootOnly()],
+            tbActiveGbps: 40,
+            hostMaxGbps: 80
+        )
+        #expect(diag?.bottleneck == .fine(activeGbps: 40),
+            "Got: \(String(describing: diag?.bottleneck))")
+        #expect(diag?.summary == "Linked to another Mac at 40 Gbps",
+            "Got: \(String(describing: diag?.summary))")
+        #expect(diag?.isWarning == false)
+    }
+
+    @Test("USB3-only path: a 5 Gbps device at the active rate keeps its device-limit verdict")
+    func usb3OnlyDeviceAtActiveKeepsDeviceLimit() {
+        // The fallback figure equals `active` here, so the guard must not
+        // fire and the existing wording stands. A 10 Gbps cable gives the
+        // device something to be the floor against.
+        let diag = DataLinkDiagnostic(
+            port: makePort(transportsActive: ["CC", "USB2", "USB3"]),
+            identities: [cableEmarker(speedCode: 2)],
+            devices: [device(speedRaw: 3)],
+            usb3Transports: [usb3(signaling: 1)],
+            cio: nil
+        )
+        #expect(diag?.bottleneck == .deviceLimit(deviceGbps: 5),
+            "Got: \(String(describing: diag?.bottleneck))")
+        #expect(diag?.facts.deviceGbps == 5)
+        #expect(diag?.summary == "Device runs at 5 Gbps",
+            "Got: \(String(describing: diag?.summary))")
+    }
+
+    @Test("Reporter shape: 80 Gbps Mac to a Mac at 80 Gbps reads as linked to another Mac")
+    func reporterShapeReadsAsLinkedToAnotherMac() {
+        let diag = DataLinkDiagnostic(
+            port: makePort(),
+            identities: [],
+            devices: [applePeerDevice(productID: 0x1905, productName: "Mac")],
+            usb3Transports: [],
+            cio: hostToHostCIO(negotiatedLinkSpeed: 4),
+            thunderboltSwitches: [hostRootOnly()],
+            tbActiveGbps: 80,
+            hostMaxGbps: 80
+        )
+        #expect(diag?.bottleneck == .fine(activeGbps: 80),
+            "Got: \(String(describing: diag?.bottleneck))")
+        #expect(diag?.summary == "Linked to another Mac at 80 Gbps",
+            "Got: \(String(describing: diag?.summary))")
     }
 }

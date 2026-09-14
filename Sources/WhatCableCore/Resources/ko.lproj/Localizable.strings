@@ -136,6 +136,8 @@
 "4 DP lanes (no USB3 alongside video)" = "DP 레인 4개 (영상과 동시에 전송되는 USB3 데이터 없음)";
 "Carrying DisplayPort video (%@)" = "DisplayPort 영상 전송 중 (%@)";
 "Connected device: %@" = "연결된 기기: %@";
+"Connected device: another Mac" = "연결된 기기: 다른 Mac";
+"USB link only" = "USB 링크만 해당";
 "Connected device: %@, %@ (%@)" = "연결된 기기: %1$@, %2$@ (%3$@)";
 "Data" = "데이터";
 "DisplayPort Alt Mode" = "DisplayPort Alt Mode";
@@ -320,6 +322,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "확인 가능한 부품은 모두 %@ 이상을 지원하지만, 링크는 더 느리게 연결되었어요. 케이블을 다시 꽂거나 다른 포트를 시도해 보면 도움이 될 수 있습니다.";
 "Running at full data speed (%@)" = "최고 데이터 속도로 동작 중 (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "발목을 잡는 부분이 없어요. 확인 가능한 부품이 모두 이 속도를 지원합니다.";
+"Linked to another Mac at %@" = "다른 Mac과 %@로 연결됨";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Thunderbolt 네트워킹은 이 링크를 통해 작동합니다. 옆에 있는 480 Mbps USB 연결은 정상이며 데이터를 전송하지 않습니다.";
 "Cable is limiting data speed" = "케이블이 데이터 속도를 제한하고 있어요";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac과 기기는 %@을(를) 낼 수 있지만, 케이블은 %@까지만 전달합니다. 더 빠른 케이블을 쓰면 최고 속도를 낼 수 있어요.";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac은 %1$@을(를) 낼 수 있지만, 케이블은 %2$@까지만 전달합니다. 더 빠른 케이블을 쓰면 최고 속도를 낼 수 있어요.";

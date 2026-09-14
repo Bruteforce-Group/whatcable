@@ -136,6 +136,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 DP lanes (no USB3 alongside video)";
 "Carrying DisplayPort video (%@)" = "Carrying DisplayPort video (%@)";
 "Connected device: %@" = "Connected device: %@";
+"Connected device: another Mac" = "Connected device: another Mac";
+"USB link only" = "USB link only";
 "Connected device: %@, %@ (%@)" = "Connected device: %1$@, %2$@ (%3$@)";
 "Data" = "Data";
 "DisplayPort Alt Mode" = "DisplayPort Alt Mode";
@@ -320,6 +322,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help.";
 "Running at full data speed (%@)" = "Running at full data speed (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "Nothing is being held back: the parts we can see all support this speed.";
+"Linked to another Mac at %@" = "Linked to another Mac at %@";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data.";
 "Cable is limiting data speed" = "Cable is limiting data speed";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed.";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "The Mac can do %1$@, but the cable only carries %2$@. A faster cable would unlock full speed.";

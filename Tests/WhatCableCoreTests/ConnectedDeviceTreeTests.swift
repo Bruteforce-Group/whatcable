@@ -821,6 +821,89 @@ struct ConnectedDeviceTreeTests {
         #expect(rows.count == 2)
         #expect(rows.allSatisfy { $0.depth == 0 })
     }
+
+    // MARK: - Host-to-host: the peer Mac's row says "USB link only"
+
+    /// Empty peer metadata, nothing provisioned: the CIO half of the
+    /// Mac-to-Mac signature.
+    private func hostToHostCIO() -> CIOCableCapability {
+        CIOCableCapability(
+            id: 10, portKey: "2/4",
+            cableGeneration: 2, negotiatedLinkSpeed: 4, generation: 3,
+            asymmetricModeSupported: true, legacyAdapter: false,
+            linkTrainingMode: 2, hpmControllerUUID: nil,
+            hasPeerMetadata: false, tunneledTransportsProvisioned: []
+        )
+    }
+
+    private func appleUSB2Root(id: UInt64 = 20, productID: UInt16, productName: String) -> USBDevice {
+        USBDevice(
+            id: id,
+            locationID: 0x0110_0000,
+            vendorID: 0x05AC,
+            productID: productID,
+            vendorName: "Apple Inc.",
+            productName: productName,
+            serialNumber: nil,
+            usbVersion: "2.00",
+            speedRaw: 2,
+            busPowerMA: nil,
+            currentMA: nil,
+            controllerPortName: "Port-USB-C@4",
+            isThunderboltTunnelled: false,
+            rawProperties: [:]
+        )
+    }
+
+    @Test("Peer Mac: exactly one row ends with 'USB link only', and it is the peer's")
+    func peerMacRowGetsTheSuffix() throws {
+        let peer = appleUSB2Root(productID: 0x7307, productName: "Macbook Air")
+        let other = device(id: 21, locationID: 0x0120_0000, name: "Keyboard", speedRaw: 1)
+        let rows = ConnectedDeviceTree.rows(
+            devices: [peer, other],
+            port: makePort(),
+            thunderboltSwitches: [hostRoot()],
+            displayPorts: [],
+            cioCapability: hostToHostCIO()
+        )
+        let suffixed = rows.filter { $0.label.hasSuffix("\u{00B7} USB link only") }
+        try #require(suffixed.count == 1, "got: \(rows.map(\.label))")
+        #expect(suffixed[0].device?.device.id == peer.id)
+        #expect(suffixed[0].label.hasPrefix("Macbook Air"))
+        // Depth and the node survive the relabel.
+        let plain = ConnectedDeviceTree.rows(
+            devices: [peer, other], port: makePort(),
+            thunderboltSwitches: [hostRoot()], displayPorts: []
+        )
+        let plainPeer = try #require(plain.first { $0.device?.device.id == peer.id })
+        #expect(suffixed[0].depth == plainPeer.depth)
+        #expect(suffixed[0].device == plainPeer.device)
+    }
+
+    @Test("No CIO capability passed: no suffix")
+    func noCIONoSuffix() {
+        let peer = appleUSB2Root(productID: 0x7307, productName: "Macbook Air")
+        let rows = ConnectedDeviceTree.rows(
+            devices: [peer],
+            port: makePort(),
+            thunderboltSwitches: [hostRoot()],
+            displayPorts: []
+        )
+        #expect(!rows.contains { $0.label.contains("USB link only") }, "got: \(rows.map(\.label))")
+    }
+
+    @Test("Vision Pro shares the CIO signature: no suffix")
+    func visionProNoSuffix() {
+        let visionPro = appleUSB2Root(productID: 0x12B1, productName: "Vision Pro")
+        let rows = ConnectedDeviceTree.rows(
+            devices: [visionPro],
+            port: makePort(),
+            thunderboltSwitches: [hostRoot()],
+            displayPorts: [],
+            cioCapability: hostToHostCIO()
+        )
+        #expect(!rows.contains { $0.label.contains("USB link only") }, "got: \(rows.map(\.label))")
+    }
 }
 
 /// Corpus-replay sweep: with no Thunderbolt switches, `ConnectedDeviceTree`

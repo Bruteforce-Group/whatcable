@@ -136,6 +136,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 DP līnijas (nav USB3 blakus video)";
 "Carrying DisplayPort video (%@)" = "Pārraida DisplayPort video (%@)";
 "Connected device: %@" = "Savienotā ierīce: %@";
+"Connected device: another Mac" = "Savienotā ierīce: cits Mac";
+"USB link only" = "Tikai USB savienojums";
 "Connected device: %@, %@ (%@)" = "Savienotā ierīce: %1$@, %2$@ (%3$@)";
 "Data" = "Dati";
 "DisplayPort Alt Mode" = "DisplayPort alt režīms";
@@ -320,6 +322,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "Visas redzamās daļas atbalsta %@ vai vairāk, bet savienojums izveidojās lēnāks. Kabeļa atkārtota pievienošana vai cita porta izmēģināšana var palīdzēt.";
 "Running at full data speed (%@)" = "Darbojas ar pilnu datu ātrumu (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "Nekas netiek ierobežots: visas redzamās daļas atbalsta šo ātrumu.";
+"Linked to another Mac at %@" = "Savienots ar citu Mac ar %@";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Thunderbolt tīkls darbojas caur šo savienojumu. 480 Mbps USB savienojums tā tuvumā ir normāla parādība un nepārraida jūsu datus.";
 "Cable is limiting data speed" = "Kabelis ierobežo datu ātrumu";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac un ierīce spēj %@, bet kabelis nodrošina tikai %@. Ātrāks kabelis atbloķētu pilnu ātrumu.";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac spēj %1$@, bet kabelis nodrošina tikai %2$@. Ātrāks kabelis atbloķētu pilnu ātrumu.";

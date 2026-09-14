@@ -995,4 +995,100 @@ struct PortSummaryThunderboltTests {
             "active cable should show active label; got: \(summary.bullets)"
         )
     }
+
+    // MARK: - Host-to-host (Mac to Mac)
+
+    /// The peer Mac's SOP identity: UFP = PDUSB Peripheral, DFP = Host,
+    /// Apple's vendor ID. Without the host-to-host check this renders as
+    /// "Connected device: USB Peripheral, Apple".
+    private func peerMacIdentity() -> USBPDSOP {
+        let idHeader: UInt32 = (1 << 31) | (1 << 30) | (2 << 27) | (2 << 23) | 0x05AC
+        return USBPDSOP(
+            id: 50, endpoint: .sop,
+            parentPortType: 0, parentPortNumber: 0,
+            vendorID: 0x05AC, productID: 0x7307, bcdDevice: 0,
+            vdos: [idHeader],
+            specRevision: 3
+        )
+    }
+
+    /// The CIO half of the signature: empty peer metadata, nothing provisioned.
+    private func hostToHostCIO() -> CIOCableCapability {
+        CIOCableCapability(
+            id: 10, portKey: "2/1",
+            cableGeneration: 2, negotiatedLinkSpeed: 4, generation: 3,
+            asymmetricModeSupported: true, legacyAdapter: false,
+            linkTrainingMode: 2, hpmControllerUUID: nil,
+            hasPeerMetadata: false, tunneledTransportsProvisioned: []
+        )
+    }
+
+    private func appleUSB2Root(productID: UInt16, productName: String) -> USBDevice {
+        USBDevice(
+            id: 20,
+            locationID: 0x0110_0000,
+            vendorID: 0x05AC,
+            productID: productID,
+            vendorName: "Apple Inc.",
+            productName: productName,
+            serialNumber: nil,
+            usbVersion: "2.00",
+            speedRaw: 2,
+            busPowerMA: nil,
+            currentMA: nil,
+            controllerPortName: "Port-USB-C@1",
+            isThunderboltTunnelled: false,
+            rawProperties: [:]
+        )
+    }
+
+    /// A host root with nothing below it: the other Mac is not a switch on
+    /// this fabric.
+    private func lonelyHostRoot() -> IOThunderboltSwitch {
+        sw(
+            uid: 100, depth: 0, parent: nil,
+            vendor: "Apple Inc.", model: "Mac",
+            ports: [lanePort(portNumber: 1, socketID: "1", speed: .usb4Tb4, widthRaw: 0x2)]
+        )
+    }
+
+    @Test("Peer Mac: 'Connected device: another Mac', no 'USB Peripheral' line")
+    func hostToHostNamesTheOtherMac() {
+        let summary = PortSummary(
+            port: tbPort(socket: "1"),
+            identities: [peerMacIdentity()],
+            devices: [appleUSB2Root(productID: 0x7307, productName: "Macbook Air")],
+            thunderboltSwitches: [lonelyHostRoot()],
+            cioCapability: hostToHostCIO()
+        )
+        let measured = summary.group(.measured)?.lines ?? []
+        #expect(measured.contains("Connected device: another Mac"), "got: \(measured)")
+        #expect(!summary.bullets.contains { $0.contains("USB Peripheral") }, "got: \(summary.bullets)")
+    }
+
+    @Test("Peer Mac with no SOP identity: still 'Connected device: another Mac'")
+    func hostToHostWithoutSOPIdentity() {
+        let summary = PortSummary(
+            port: tbPort(socket: "1"),
+            identities: [],
+            devices: [appleUSB2Root(productID: 0x7307, productName: "Macbook Air")],
+            thunderboltSwitches: [lonelyHostRoot()],
+            cioCapability: hostToHostCIO()
+        )
+        let measured = summary.group(.measured)?.lines ?? []
+        #expect(measured.contains("Connected device: another Mac"), "got: \(measured)")
+    }
+
+    @Test("Vision Pro shares the CIO signature: keeps 'USB Peripheral', never 'another Mac'")
+    func visionProIsNotAnotherMac() {
+        let summary = PortSummary(
+            port: tbPort(socket: "1"),
+            identities: [peerMacIdentity()],
+            devices: [appleUSB2Root(productID: 0x12B1, productName: "Vision Pro")],
+            thunderboltSwitches: [lonelyHostRoot()],
+            cioCapability: hostToHostCIO()
+        )
+        #expect(summary.bullets.contains { $0.contains("USB Peripheral") }, "got: \(summary.bullets)")
+        #expect(!summary.bullets.contains { $0.contains("another Mac") }, "got: \(summary.bullets)")
+    }
 }

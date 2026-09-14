@@ -112,11 +112,11 @@
       "className" : "AppleHPMInterfaceType10",
       "connectionActive" : true,
       "dataLink" : {
-        "bottleneck" : "deviceLimit",
+        "bottleneck" : "cableLimit",
         "cableSignalConflict" : false,
-        "detail" : "This is the fastest the connected device supports. It is not a cable problem.",
-        "isWarning" : false,
-        "summary" : "Device runs at 480 Mbps"
+        "detail" : "The Mac can do 80 Gbps, but the cable only carries 40 Gbps. A faster cable would unlock full speed.",
+        "isWarning" : true,
+        "summary" : "Cable is limiting data speed"
       },
       "devices" : [
         {
@@ -166,8 +166,11 @@
         ]
       },
       "trust" : {
+        "confirmedBy" : [
+          "data"
+        ],
         "contradiction" : false,
-        "tier" : "amber"
+        "tier" : "green"
       },
       "type" : "USB-C"
     },

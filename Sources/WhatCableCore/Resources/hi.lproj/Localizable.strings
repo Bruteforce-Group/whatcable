@@ -124,6 +124,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 DP लेन (वीडियो के साथ USB3 नहीं)";
 "Carrying DisplayPort video (%@)" = "DisplayPort वीडियो प्रसारित हो रहा है (%@)";
 "Connected device: %@" = "कनेक्टेड डिवाइस: %@";
+"Connected device: another Mac" = "कनेक्टेड डिवाइस: दूसरा Mac";
+"USB link only" = "केवल USB लिंक";
 "Connected device: %@, %@ (%@)" = "कनेक्टेड डिवाइस: %1$@, %2$@ (%3$@)";
 "Data" = "डेटा";
 "DisplayPort Alt Mode" = "DisplayPort ऑल्ट मोड";
@@ -320,6 +322,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "जो हिस्से दिख रहे हैं वे सभी %@ या उससे अधिक को सपोर्ट करते हैं, लेकिन लिंक धीमा आया। केबल दोबारा लगाने या दूसरा पोर्ट आज़माने से मदद हो सकती है।";
 "Running at full data speed (%@)" = "पूरी डेटा गति से चल रहा है (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "कोई रुकावट नहीं है: जो हिस्से दिख रहे हैं वे सभी इस गति को सपोर्ट करते हैं।";
+"Linked to another Mac at %@" = "दूसरे Mac से %@ पर लिंक";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "इस लिंक पर Thunderbolt नेटवर्किंग चलती है। साथ वाला 480 Mbps USB कनेक्शन सामान्य है और यह आपका डेटा नहीं ले जाता।";
 "Cable is limiting data speed" = "केबल डेटा गति को सीमित कर रही है";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac और डिवाइस %@ कर सकते हैं, लेकिन केबल केवल %@ ले जा सकती है। तेज़ केबल से पूरी गति मिलेगी।";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac %1$@ कर सकता है, लेकिन केबल केवल %2$@ ले जा सकती है। तेज़ केबल से पूरी गति मिलेगी।";

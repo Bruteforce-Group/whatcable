@@ -21,8 +21,8 @@ Supports high-speed data, smart cable.
   What WhatCable knows
     • Made by Apple (0x05AC), per our bundled vendor list
 
-Data: Device runs at 480 Mbps
-  This is the fastest the connected device supports. It is not a cable problem.
+Data: Cable is limiting data speed
+  The Mac can do 80 Gbps, but the cable only carries 40 Gbps. A faster cable would unlock full speed.
 
 Connected devices:
   • Magic Keyboard (Apple) - High Speed (480 Mbps)

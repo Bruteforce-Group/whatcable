@@ -124,6 +124,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 DP գիծ (USB3-ն տեսանյութի հետ մեկտեղ չկա)";
 "Carrying DisplayPort video (%@)" = "Փոխանցում է DisplayPort տեսանյութ (%@)";
 "Connected device: %@" = "Միացված սարք՝ %@";
+"Connected device: another Mac" = "Միացված սարք՝ մեկ այլ Mac";
+"USB link only" = "Միայն USB կապ";
 "Connected device: %@, %@ (%@)" = "Միացված սարք՝ %1$@, %2$@ (%3$@)";
 "Data" = "Տվյալներ";
 "DisplayPort Alt Mode" = "DisplayPort alt ռեժիմ";
@@ -321,6 +323,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "Բոլոր տեսանելի բաղադրիչները աջակցում են %@-ին կամ ավելիին, սակայն կապն ավելի դանդաղ է հաստատվել: Մալուխը վերամիացնելը կամ այլ նավահանգիստ փորձելը կարող է օգնել:";
 "Running at full data speed (%@)" = "Աշխատում է տվյալների լրիվ արագությամբ (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "Ոչինչ չի սահմանափակվում. բոլոր տեսանելի բաղադրիչները աջակցում են այս արագությանը:";
+"Linked to another Mac at %@" = "Կապակցված է մեկ այլ Mac-ի հետ %@ արագությամբ";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Thunderbolt ցանցն աշխատում է այս կապի միջոցով։ Կողքի 480 Mbps USB կապը սովորական է և չի կրում ձեր տվյալները։";
 "Cable is limiting data speed" = "Մալուխը սահմանափակում է տվյալների արագությունը";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac-ը և սարքը կարող են %@, սակայն մալուխն ապահովում է միայն %@: Ավելի արագ մալուխ կբացի լրիվ արագությունը:";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac-ը կարող է %1$@, սակայն մալուխն ապահովում է միայն %2$@: Ավելի արագ մալուխ կբացի լրիվ արագությունը:";

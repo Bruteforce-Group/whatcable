@@ -124,6 +124,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 本の DP レーン (映像と並行する USB3 なし)";
 "Carrying DisplayPort video (%@)" = "DisplayPort映像を伝送中 (%@)";
 "Connected device: %@" = "接続デバイス: %@";
+"Connected device: another Mac" = "接続デバイス: 別のMac";
+"USB link only" = "USBリンクのみ";
 "Connected device: %@, %@ (%@)" = "接続デバイス: %1$@、%2$@ (%3$@)";
 "Data" = "データ";
 "DisplayPort Alt Mode" = "DisplayPort オルタネートモード";
@@ -322,6 +324,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "確認できる構成要素はすべて %@ 以上に対応していますが、リンクはより低速で確立されました。ケーブルの抜き挿しや別のポートへの接続をお試しください。";
 "Running at full data speed (%@)" = "フルデータ速度で動作中 (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "制限なし。確認できる構成要素はすべてこの速度に対応しています。";
+"Linked to another Mac at %@" = "別のMacと%@でリンク";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Thunderboltネットワークはこのリンク上で動作します。隣にある480 Mbps USB接続は正常であり、データを運ぶものではありません。";
 "Cable is limiting data speed" = "ケーブルがデータ速度を制限しています";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac とデバイスは %@ に対応していますが、ケーブルは %@ しか転送できません。より高速なケーブルを使うとフルスピードが出ます。";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac は %1$@ に対応していますが、ケーブルは %2$@ しか転送できません。より高速なケーブルを使うとフルスピードが出ます。";

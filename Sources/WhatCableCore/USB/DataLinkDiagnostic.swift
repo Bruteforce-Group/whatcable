@@ -275,6 +275,12 @@ extension DataLinkDiagnostic {
         // below share its notion of live. `cioGbps` and the facts keep
         // reading the row as it is.
         let liveCIO = port.transportsActive.contains("CIO") ? cio : nil
+        // A Mac on the far end has no switch of its own, so its ceiling is
+        // unknowable and no verdict may name a culprit: on a peer link the
+        // controller figure is the negotiated rate, not a floor on the cable.
+        let hostToHost = HostToHostLink.isHostToHost(
+            port: port, devices: devices, cio: liveCIO, thunderboltSwitches: thunderboltSwitches
+        )
 
         // Cable's claimed speed from its e-marker (SOP' / SOP'').
         let cableIdentity = identities
@@ -432,15 +438,22 @@ extension DataLinkDiagnostic {
         // partner, both describe a different link and are legitimately slower
         // than the one carrying them.
         let deviceCapIsDirectPartner: Bool
+        // True only for the USB-device fallback below. With no partner
+        // switch that figure is the fastest USB device on the port, which
+        // on a Thunderbolt lane can be a peer that is not this link's
+        // endpoint at all.
+        let deviceCapIsUSBFallback: Bool
         if let terminal {
             rawDeviceMaxGbps = terminal.supportedSpeed.maxTotalGbps
                 ?? Self.terminalLegActiveGbps(terminal)
                 ?? Self.activeTBGbps(port: port, switches: thunderboltSwitches)
             deviceCapIsDirectPartner = false
+            deviceCapIsUSBFallback = false
         } else if let partner {
             rawDeviceMaxGbps = partner.supportedSpeed.maxTotalGbps
                 ?? Self.activeTBGbps(port: port, switches: thunderboltSwitches)
             deviceCapIsDirectPartner = true
+            deviceCapIsUSBFallback = false
         } else {
             // A device that declares SuperSpeed in its BOS or bcdUSB but
             // enumerated at 480 Mbps is not evidence against the cable.
@@ -458,13 +471,15 @@ extension DataLinkDiagnostic {
             // enumerated at SuperSpeed), and even then the hub is the first
             // suspect, not the cable.
             //
-            // Reachability note: this arm only runs with no Thunderbolt
-            // partner, and `active` is nil unless a SuperSpeed device is in
-            // the native list or the transport is TRM-restricted, so the
-            // fastest device here is already SuperSpeed; a 480 Mbps device
-            // limit cannot be produced on this path in production.
+            // On the USB3-only path `active` comes from the root SuperSpeed
+            // device or the transport, so the fastest device is at or above
+            // it. On a Thunderbolt lane with no partner switch (a Mac on
+            // the far end) the fastest device is the peer's 480 Mbps USB
+            // 2.0 interface: a figure below `active` that the drop below
+            // handles, never a device limit.
             rawDeviceMaxGbps = usbDeviceGbps
             deviceCapIsDirectPartner = false
+            deviceCapIsUSBFallback = true
         }
         // TB1/TB2-era device cap (issue #515): the device figure comes from
         // the terminal switch when there is a genuine multi-hop chain,
@@ -481,11 +496,14 @@ extension DataLinkDiagnostic {
 
         // A direct partner's cap that sits meaningfully below the rate the
         // first hop demonstrably carried is self-refuting: the switch on the
-        // other end of this cable took part in that link. Such a figure is
-        // dropped from the comparison AND from the reported facts, so no
-        // consumer prints a capability the diagnostic decided not to trust.
+        // other end of this cable took part in that link. A USB fallback
+        // figure below that rate is not this link's endpoint either. Such a
+        // figure is dropped from the comparison AND from the reported facts,
+        // so no consumer prints a capability the diagnostic decided not to
+        // trust.
         let deviceCapDropped = deviceMaxGbps.map {
-            deviceCapIsDirectPartner && Self.capContradictsActive($0, active: active)
+            (deviceCapIsDirectPartner || deviceCapIsUSBFallback)
+                && Self.capContradictsActive($0, active: active)
         } ?? false
         let reportedDeviceGbps = deviceCapDropped ? nil : deviceMaxGbps
         // A dropped device figure never enters `caps`, so it can't be named
@@ -518,6 +536,13 @@ extension DataLinkDiagnostic {
         let conflictNote = conflict
             ? " " + String(localized: "The cable's e-marker and the Thunderbolt controller disagree on its speed. The controller measured a higher, confirmed rate, so that figure is used.", bundle: _coreLocalizedBundle)
             : ""
+
+        // Mac-to-Mac: nothing below may name a culprit. This cannot meet
+        // the contradiction short-circuit next, which needs `liveCIO == nil`.
+        if hostToHost {
+            (self.bottleneck, self.summary, self.detail) = Self.hostToHostVerdict(active: active, cableGbps: cableMaxGbps)
+            return
+        }
 
         // Cable / active-rate contradiction short-circuit. When the
         // e-marker claims a speed meaningfully below the active rate and
@@ -662,6 +687,22 @@ extension DataLinkDiagnostic {
             self.summary = String(localized: "Device runs at \(Self.label(expected))", bundle: _coreLocalizedBundle)
             self.detail = String(localized: "This is the fastest the connected device supports. It is not a cable problem.", bundle: _coreLocalizedBundle) + conflictNote
         }
+    }
+
+    // MARK: - Host-to-host verdict
+
+    /// The verdict a Mac-to-Mac link collapses to. The peer's ceiling is
+    /// unknowable, so nothing here names a culprit; the `conflictNote` is
+    /// left off on purpose. A cable figure above the active tier is a claim
+    /// the link never carried, and `.fine` is what CableTrust reads as
+    /// "delivered its claim", so that shape is `.unknownCable`.
+    private static func hostToHostVerdict(active: Double, cableGbps: Double?) -> (Bottleneck, String, String) {
+        let claimUncarried = cableGbps.map { !Self.sameTier($0, active) } ?? false
+        return (
+            claimUncarried ? .unknownCable(activeGbps: active) : .fine(activeGbps: active),
+            String(localized: "Linked to another Mac at \(Self.label(active))", bundle: _coreLocalizedBundle),
+            String(localized: "Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data.", bundle: _coreLocalizedBundle)
+        )
     }
 
     // MARK: - Speed resolution helpers

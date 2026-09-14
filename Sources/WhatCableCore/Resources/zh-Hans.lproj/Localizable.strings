@@ -124,6 +124,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 条 DP 通道（视频旁无 USB3）";
 "Carrying DisplayPort video (%@)" = "正在传输 DisplayPort 视频 (%@)";
 "Connected device: %@" = "已连接设备：%@";
+"Connected device: another Mac" = "已连接设备：另一台 Mac";
+"USB link only" = "仅 USB 链接";
 "Connected device: %@, %@ (%@)" = "已连接设备：%1$@，%2$@ (%3$@)";
 "Data" = "数据";
 "DisplayPort Alt Mode" = "DisplayPort 替代模式";
@@ -321,6 +323,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "已知组件均支持 %@ 或更高速度，但链路建立速度较低。重新插拔线缆或尝试其他端口可能会有所帮助。";
 "Running at full data speed (%@)" = "以全速数据速率运行（%@）";
 "Nothing is being held back: the parts we can see all support this speed." = "没有受到任何限制：已知组件均支持此速度。";
+"Linked to another Mac at %@" = "以 %@ 链接到另一台 Mac";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Thunderbolt 网络通过此链接运行。旁边的 480 Mbps USB 连接是正常现象，不会传输您的数据。";
 "Cable is limiting data speed" = "线缆限制了数据传输速度";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac 和设备均可支持 %@，但线缆仅支持 %@。更换更快的线缆将能达到全速。";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac 可支持 %1$@，但线缆仅支持 %2$@。更换更快的线缆将能达到全速。";

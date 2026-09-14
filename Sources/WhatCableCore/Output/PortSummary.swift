@@ -370,6 +370,13 @@ extension PortSummary {
         let adapterIdentityWillFire = chargingSource != nil
             && (adapter?.manufacturer?.isEmpty == false || accessoryChargerName != nil)
 
+        // A Mac on the far end answers Discover Identity as a plain USB
+        // peripheral and never publishes a UVDM name, so both identity
+        // branches below would mislabel it. Decided once, checked in both.
+        let isHostToHost = HostToHostLink.isHostToHost(
+            port: port, devices: devices, cio: cioCapability, thunderboltSwitches: thunderboltSwitches)
+        let hostToHostLine = String(localized: "Connected device: another Mac", bundle: _coreLocalizedBundle)
+
         // Partner identity (SOP): what's connected.
         if let partner = identities.first(where: { $0.endpoint == .sop }),
            let header = partner.idHeader {
@@ -391,16 +398,18 @@ extension PortSummary {
                 // If adapterIdentityWillFire, a richer "Charger: <mfr> <name>"
                 // line is coming later; skip to avoid a double charger line
                 // (mirrors the federated branch's guard).
+            } else if isHostToHost {
+                // Ahead of the accessory name on purpose: a peer Mac publishes
+                // Product "Macintosh", which would otherwise render as
+                // "Connected device: Macintosh (Apple)".
+                measured.append(hostToHostLine)
             } else if let accessoryDeviceName {
                 // A power adapter never reaches here: it has no device name, so
                 // it falls through to the PD-derived wording below and is named
                 // on the charger line instead.
                 //
-                // A peer Mac publishes Product "Macintosh", so a Mac-to-Mac
-                // Thunderbolt link renders "Connected device: Macintosh
-                // (Apple)" here. Host-to-host wording is owned elsewhere and
-                // will add its own check ahead of this one, so this stays the
-                // LAST alternative tried before the PD-derived wording below.
+                // Host-to-host has already been tried above, so this is the
+                // LAST alternative before the PD-derived wording below.
                 // The PD revision goes inside the single %@ argument so no new
                 // localised key is needed, exactly as the charger line does.
                 let label = partner.pdRevisionLabel.map { "\(accessoryDeviceName) (Apple) (\($0))" }
@@ -414,6 +423,10 @@ extension PortSummary {
                     measured.append(String(localized: "Connected device: \(kind), \(vendor)", bundle: _coreLocalizedBundle))
                 }
             }
+        } else if isHostToHost {
+            // A peer Mac that answered no Discover Identity still needs a
+            // connected-device line; the USB device and CIO row are enough.
+            measured.append(hostToHostLine)
         } else if let portNum = port.portNumber,
                   let fed = federatedIdentities.first(where: { $0.portIndex == portNum }),
                   fed.hasDevice,

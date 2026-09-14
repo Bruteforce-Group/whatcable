@@ -82,6 +82,15 @@ public struct CIOCableCapability: Identifiable, Hashable, Sendable {
     /// Internal join key only. Never serialised to JSON or text output.
     public let hpmControllerUUID: String?
 
+    /// Whether the CIO row's `Metadata` dictionary (the peer's identity:
+    /// model name, UID, ROM version) carries any keys. A Mac on the far end
+    /// publishes an empty one. nil means the key was not read, not "none".
+    public let hasPeerMetadata: Bool?
+    /// The row's `TunneledTransportsProvisioned` list (e.g. `["USB3",
+    /// "PCIe"]`). Empty when nothing is provisioned through the tunnel. nil
+    /// means the key was not read, not "none".
+    public let tunneledTransportsProvisioned: [String]?
+
     public init(
         id: UInt64,
         portKey: String,
@@ -91,7 +100,9 @@ public struct CIOCableCapability: Identifiable, Hashable, Sendable {
         asymmetricModeSupported: Bool?,
         legacyAdapter: Bool?,
         linkTrainingMode: Int?,
-        hpmControllerUUID: String? = nil
+        hpmControllerUUID: String? = nil,
+        hasPeerMetadata: Bool? = nil,
+        tunneledTransportsProvisioned: [String]? = nil
     ) {
         self.id = id
         self.portKey = portKey
@@ -102,6 +113,8 @@ public struct CIOCableCapability: Identifiable, Hashable, Sendable {
         self.legacyAdapter = legacyAdapter
         self.linkTrainingMode = linkTrainingMode
         self.hpmControllerUUID = hpmControllerUUID
+        self.hasPeerMetadata = hasPeerMetadata
+        self.tunneledTransportsProvisioned = tunneledTransportsProvisioned
     }
 
     /// Canonical in-session join key: normalised UUID when captured, else portKey.

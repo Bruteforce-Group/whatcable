@@ -101,32 +101,65 @@ public enum ConnectedDeviceTree {
     ///     helper can't place it); it keeps flowing through
     ///     `TunnelledDeviceGrouping.group`'s single-active-port fallback,
     ///     unchanged.
+    ///   - cioCapability: this port's CIO row, so a Mac on the far end can be
+    ///     told from a USB peripheral. Nil means no host-to-host check.
     public static func rows(
         devices: [USBDevice],
         tunnelledDevices: [USBDevice] = [],
         port: AppleHPMInterface,
         thunderboltSwitches: [IOThunderboltSwitch],
         displayPorts: [IOPortTransportStateDisplayPort],
+        cioCapability: CIOCableCapability? = nil,
         hubs: HubDisplay = .all
     ) -> [Row] {
-        // Merged once, at the top: every path below (the no-Thunderbolt
-        // fallback included, though `tunnelledDevices` should be empty there
-        // by construction) reads `allDevices`, never the bare `devices`
-        // parameter, so a tunnelled device can never be silently dropped by
-        // a path that forgot about it.
-        // Defence in depth (plan pcie-tunnelled-usb-attribution): the wiring
-        // rule is that callers pass native matches in `devices` and
-        // structurally scoped devices in `tunnelledDevices`, never the union
-        // in both; dedup by id here so a miswired caller renders a device
-        // once instead of twice.
-        let allDevices: [USBDevice]
-        if tunnelledDevices.isEmpty {
-            allDevices = devices
-        } else {
-            var seen = Set<UInt64>()
-            allDevices = (devices + tunnelledDevices).filter { seen.insert($0.id).inserted }
+        let allDevices = mergeDevices(devices, tunnelledDevices)
+        let rows = layoutRows(
+            allDevices: allDevices,
+            port: port,
+            thunderboltSwitches: thunderboltSwitches,
+            displayPorts: displayPorts,
+            hubs: hubs
+        )
+        // A peer Mac enumerates as a USB 2.0 device, so its row would read as
+        // a 480 Mbps peripheral. The suffix says why: the Thunderbolt link is
+        // up but only USB crosses it. A post-pass keyed on the device id
+        // covers every layout path without each one knowing about it.
+        guard HostToHostLink.isHostToHost(
+            port: port, devices: allDevices, cio: cioCapability, thunderboltSwitches: thunderboltSwitches),
+            let peerID = HostToHostLink.peerMac(in: allDevices)?.id
+        else { return rows }
+        let suffix = String(localized: "USB link only", bundle: _coreLocalizedBundle)
+        return rows.map { row in
+            guard row.device?.device.id == peerID else { return row }
+            return Row(label: "\(row.label) \u{00B7} \(suffix)", depth: row.depth, device: row.device)
         }
+    }
 
+    /// `devices` plus `tunnelledDevices`, deduplicated by id.
+    ///
+    /// Merged once, at the top: every layout path (the no-Thunderbolt
+    /// fallback included, though `tunnelledDevices` should be empty there by
+    /// construction) reads the merged list, never the bare `devices`
+    /// parameter, so a tunnelled device can never be silently dropped by a
+    /// path that forgot about it.
+    /// Defence in depth (plan pcie-tunnelled-usb-attribution): the wiring
+    /// rule is that callers pass native matches in `devices` and
+    /// structurally scoped devices in `tunnelledDevices`, never the union
+    /// in both; dedup by id here so a miswired caller renders a device
+    /// once instead of twice.
+    private static func mergeDevices(_ devices: [USBDevice], _ tunnelledDevices: [USBDevice]) -> [USBDevice] {
+        guard !tunnelledDevices.isEmpty else { return devices }
+        var seen = Set<UInt64>()
+        return (devices + tunnelledDevices).filter { seen.insert($0.id).inserted }
+    }
+
+    private static func layoutRows(
+        allDevices: [USBDevice],
+        port: AppleHPMInterface,
+        thunderboltSwitches: [IOThunderboltSwitch],
+        displayPorts: [IOPortTransportStateDisplayPort],
+        hubs: HubDisplay
+    ) -> [Row] {
         guard let hostRoot = thunderboltHostRoot(port: port, switches: thunderboltSwitches)
         else {
             // No Thunderbolt device downstream: the plain USB tree, unchanged.

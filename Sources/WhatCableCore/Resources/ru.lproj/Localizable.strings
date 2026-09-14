@@ -136,6 +136,8 @@
 "4 DP lanes (no USB3 alongside video)" = "4 линии DP (без USB3 рядом с видео)";
 "Carrying DisplayPort video (%@)" = "Передаётся видео DisplayPort (%@)";
 "Connected device: %@" = "Подключённое устройство: %@";
+"Connected device: another Mac" = "Подключённое устройство: другой Mac";
+"USB link only" = "Только USB-соединение";
 "Connected device: %@, %@ (%@)" = "Подключённое устройство: %1$@, %2$@ (%3$@)";
 "Data" = "Данные";
 "DisplayPort Alt Mode" = "Режим DisplayPort Alt Mode";
@@ -320,6 +322,8 @@
 "The parts we can see all support %@ or more, but the link came up slower. Reseating the cable or trying another port may help." = "Все видимые части поддерживают %@ или выше, но линк поднялся медленнее. Переподключите кабель или попробуйте другой порт.";
 "Running at full data speed (%@)" = "Полная скорость данных (%@)";
 "Nothing is being held back: the parts we can see all support this speed." = "Ничто не сдерживает скорость: все видимые части поддерживают этот режим.";
+"Linked to another Mac at %@" = "Подключено к другому Mac на %@";
+"Thunderbolt networking runs over this link. The 480 Mbps USB connection alongside it is normal and does not carry your data." = "Сеть Thunderbolt работает через это соединение. USB-соединение на 480 Mbps рядом с ним: это нормально и не передаёт ваши данные.";
 "Cable is limiting data speed" = "Кабель ограничивает скорость данных";
 "The Mac and device can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac и устройство поддерживают %@, но кабель тянет только %@. Более быстрый кабель даст полную скорость.";
 "The Mac can do %@, but the cable only carries %@. A faster cable would unlock full speed." = "Mac поддерживает %1$@, но кабель тянет только %2$@. Более быстрый кабель даст полную скорость.";
