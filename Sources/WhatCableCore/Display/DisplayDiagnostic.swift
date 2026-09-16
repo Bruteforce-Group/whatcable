@@ -512,9 +512,12 @@ extension DisplayDiagnostic {
     /// 1 ("1.62 Gbps (RBR)"), 2 ("2.7 Gbps (HBR)"), 3 ("5.4 Gbps (HBR2)"), and
     /// 4 ("8.1 Gbps (HBR3)"). Code 1 (RBR) is now corpus-confirmed: it first
     /// appeared in that batch on an M2 Max driving an HP E271i over USB-C,
-    /// which macOS itself labelled "1.62 Gbps (RBR)". macOS's other documented
-    /// codes (6/10/20/30/40) still never appeared once, so they are
-    /// deliberately left out here rather than guessed at.
+    /// which macOS itself labelled "1.62 Gbps (RBR)". The kernel's own table
+    /// (IODisplayPortFamily transport state, build 25G83, read 2026-09-16)
+    /// continues 5 "10 Gbps (UHBR10)", 6 "13.5 Gbps (UHBR13.5)",
+    /// 7 "20 Gbps (UHBR20)"; none has appeared in the corpus, so they are
+    /// left out here until one does. See
+    /// research/classes/_meaning/IOPortTransportStateDisplayPort.md.
     public static let confirmedLinkRateDescriptions: [Int: String] = [
         0: "No Link",
         1: "1.62 Gbps (RBR)",
