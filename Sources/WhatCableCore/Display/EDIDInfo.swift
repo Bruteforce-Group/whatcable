@@ -4,25 +4,52 @@ import Foundation
 /// Data): the descriptor block every display sends over DisplayPort / HDMI
 /// describing what it is and which modes it supports.
 ///
-/// We read two things that matter for the display weakest-link diagnostic:
+/// Two different things live here, and they must not be confused:
 ///
-/// - the monitor's **preferred** mode (its out-of-the-box default, taken from
-///   the first detailed timing descriptor), and
-/// - the monitor's **maximum** capability (max refresh and max pixel clock,
-///   from the 0xFD display range-limits descriptor).
+/// - **Modes.** `preferredWidth`/`Height`/`RefreshHz` is the first detailed
+///   timing (the out-of-the-box default); `topDetailedTiming` is the highest
+///   detailed timing anywhere in the EDID. Both are modes the panel has.
+/// - **The envelope.** `rangeLimitMaxRefreshHz` and
+///   `rangeLimitMaxPixelClockHz` come from the 0xFD display range-limits
+///   descriptor. They describe the range of signals the panel will *accept*,
+///   not a mode it has. A 4K60 panel routinely declares a 75 Hz vertical
+///   ceiling it has no 75 Hz mode for.
 ///
-/// The maximum is the one the diagnostic compares the link against. The
-/// feature's whole question is "why won't my monitor run at its *full*
-/// refresh?", so checking the link against the preferred (conservative) mode
-/// would hide exactly the bottleneck we are looking for: a 100 Hz monitor
-/// capped to 60 Hz by a weak cable would read as "fine".
+/// The diagnostic compares the link against the display's **top mode**, never
+/// the preferred one: the feature's whole question is "why won't my monitor
+/// run at its *full* refresh?", so checking against the preferred
+/// (conservative) mode would hide exactly the bottleneck we are looking for,
+/// a 100 Hz monitor capped to 60 Hz by a weak cable reading as "fine". The
+/// top mode comes from `topDetailedTiming` here, and in `DisplayDiagnostic`
+/// from CoreGraphics' `maxMode` in preference to it. It never comes from the
+/// 0xFD envelope.
 ///
-/// Pure value type, no platform imports, so it compiles on every target.
-/// The 128-byte base block drives the preferred mode and the 0xFD ceiling;
-/// the CTA-861 extension block (when present) is scanned for detailed
-/// timings so a top mode declared only there still counts toward the max.
-/// Other extension data (DSC capability, audio, HDR) is not yet parsed.
+/// Pure value type, no platform imports, so it compiles on every target. The
+/// 128-byte base block carries the preferred mode, the 0xFD envelope and four
+/// timing slots; the CTA-861 extension block (when present) is scanned too,
+/// so a top mode declared only there still counts. Other extension data (DSC
+/// capability, audio, HDR) is not yet parsed.
 public struct EDIDInfo: Hashable, Sendable {
+    /// One detailed timing descriptor: a mode the display actually has, as
+    /// opposed to the 0xFD range-limits envelope, which is only the set of
+    /// signals it will accept.
+    public struct DetailedTiming: Hashable, Sendable {
+        public let width: Int
+        public let height: Int
+        public let refreshHz: Int
+        /// Pixel clock in Hz. Includes blanking, so this is the figure a
+        /// bandwidth calculation needs. CoreGraphics reports active pixels
+        /// only and runs 10-20% lower at the very same mode.
+        public let pixelClockHz: Int
+
+        public init(width: Int, height: Int, refreshHz: Int, pixelClockHz: Int) {
+            self.width = width
+            self.height = height
+            self.refreshHz = refreshHz
+            self.pixelClockHz = pixelClockHz
+        }
+    }
+
     /// Monitor name from the 0xFC descriptor, e.g. "LEN G34w-10". Not every
     /// EDID includes one, so optional.
     public let monitorName: String?
@@ -38,16 +65,21 @@ public struct EDIDInfo: Hashable, Sendable {
     /// Pixel clock of the preferred mode, in Hz.
     public let preferredPixelClockHz: Int
 
-    /// Maximum vertical refresh the monitor accepts, in Hz, from byte 6 of the
-    /// 0xFD range-limits descriptor. Optional: a monitor EDID is not required
-    /// to carry a range-limits descriptor.
-    public let maxRefreshHz: Int?
-    /// Maximum pixel clock the monitor accepts, in Hz, from byte 9 of the
-    /// 0xFD descriptor (stored there in units of 10 MHz). This is the ceiling
-    /// the display diagnostic uses for its bandwidth comparison: it is not
-    /// subject to the EDID 1.4 rate-offset flags, so it stays correct even for
-    /// very high refresh monitors.
-    public let maxPixelClockHz: Int?
+    /// Top of the vertical scan range the monitor will accept, in Hz, from
+    /// byte 6 of the 0xFD range-limits descriptor. **Not a mode.** A panel
+    /// with no mode above 60 Hz can and does declare 75 Hz here. Optional: a
+    /// monitor EDID is not required to carry a range-limits descriptor.
+    public let rangeLimitMaxRefreshHz: Int?
+    /// Top of the pixel-clock range the monitor will accept, in Hz, from byte
+    /// 9 of the 0xFD descriptor (stored there in units of 10 MHz). **Not a
+    /// mode**, and not the same signal as the refresh ceiling above: the two
+    /// bound the envelope independently. Not subject to the EDID 1.4
+    /// rate-offset flags.
+    public let rangeLimitMaxPixelClockHz: Int?
+
+    /// The highest detailed timing in the EDID, by pixel clock: the display's
+    /// real top mode. Nil when the EDID carries no detailed timing at all.
+    public let topDetailedTiming: DetailedTiming?
 
     /// Memberwise init, mainly so tests (and the diagnostic's own tests) can
     /// fabricate an `EDIDInfo` without a raw byte blob.
@@ -59,8 +91,9 @@ public struct EDIDInfo: Hashable, Sendable {
         preferredHeight: Int,
         preferredRefreshHz: Int,
         preferredPixelClockHz: Int,
-        maxRefreshHz: Int?,
-        maxPixelClockHz: Int?
+        rangeLimitMaxRefreshHz: Int?,
+        rangeLimitMaxPixelClockHz: Int?,
+        topDetailedTiming: DetailedTiming? = nil
     ) {
         self.monitorName = monitorName
         self.versionMajor = versionMajor
@@ -69,8 +102,9 @@ public struct EDIDInfo: Hashable, Sendable {
         self.preferredHeight = preferredHeight
         self.preferredRefreshHz = preferredRefreshHz
         self.preferredPixelClockHz = preferredPixelClockHz
-        self.maxRefreshHz = maxRefreshHz
-        self.maxPixelClockHz = maxPixelClockHz
+        self.rangeLimitMaxRefreshHz = rangeLimitMaxRefreshHz
+        self.rangeLimitMaxPixelClockHz = rangeLimitMaxPixelClockHz
+        self.topDetailedTiming = topDetailedTiming
     }
 
     /// Parse the 128-byte EDID base block. Returns `nil` when the blob is too
@@ -94,39 +128,17 @@ public struct EDIDInfo: Hashable, Sendable {
         // Preferred timing = the first detailed timing descriptor. A slot is a
         // detailed timing when its pixel-clock word (bytes 0-1) is non-zero; a
         // zero there marks a display (text) descriptor instead.
-        var width = 0, height = 0, refreshHz = 0, pixelClockHz = 0
+        var preferred: DetailedTiming? = nil
         for off in descriptorOffsets {
-            let pixelClock10kHz = Int(bytes[off]) | (Int(bytes[off + 1]) << 8)
-            guard pixelClock10kHz != 0 else { continue }
-            let clockHz = pixelClock10kHz * 10_000
-            // Active / blanking are split across a low byte and a high nibble.
-            let hActive = Int(bytes[off + 2]) | ((Int(bytes[off + 4]) >> 4) << 8)
-            let hBlank  = Int(bytes[off + 3]) | ((Int(bytes[off + 4]) & 0x0F) << 8)
-            let vActive = Int(bytes[off + 5]) | ((Int(bytes[off + 7]) >> 4) << 8)
-            let vBlank  = Int(bytes[off + 6]) | ((Int(bytes[off + 7]) & 0x0F) << 8)
-            // EDID 1.4 detailed-timing border bytes: offset +15 is the
-            // horizontal border and +16 the vertical border, and each value
-            // is per side, so the active picture is flanked by two of them.
-            // Border pixels occupy pixel-clock cycles, so they widen the
-            // total period and must be counted (twice) in the refresh
-            // denominator — omitting them makes the rate read too high.
-            let hBorder = Int(bytes[off + 15])
-            let vBorder = Int(bytes[off + 16])
-            let hTotal = hActive + hBlank + 2 * hBorder
-            let vTotal = vActive + vBlank + 2 * vBorder
-            width = hActive
-            height = vActive
-            pixelClockHz = clockHz
-            if hTotal > 0 && vTotal > 0 {
-                refreshHz = Int((Double(clockHz) / Double(hTotal * vTotal)).rounded())
-            }
+            guard let timing = Self.detailedTiming(bytes, at: off) else { continue }
+            preferred = timing
             break // first detailed timing is the preferred one
         }
-        guard width > 0, height > 0 else { return nil }
-        self.preferredWidth = width
-        self.preferredHeight = height
-        self.preferredRefreshHz = refreshHz
-        self.preferredPixelClockHz = pixelClockHz
+        guard let preferred, preferred.width > 0, preferred.height > 0 else { return nil }
+        self.preferredWidth = preferred.width
+        self.preferredHeight = preferred.height
+        self.preferredRefreshHz = preferred.refreshHz
+        self.preferredPixelClockHz = preferred.pixelClockHz
 
         // Walk the display descriptors (bytes 0-2 all zero) for the range
         // limits (0xFD) and the monitor name (0xFC).
@@ -156,27 +168,65 @@ public struct EDIDInfo: Hashable, Sendable {
                 break
             }
         }
-        // The 0xFD descriptor gives a ceiling, but some monitors declare their
-        // top mode only as a detailed timing, sometimes in the CTA-861
-        // extension block. Scan every detailed timing (base block and
-        // extension) and take the higher of that and the 0xFD ceiling, so the
-        // ceiling isn't understated for those monitors.
-        let highestDTD = Self.highestDTDPixelClockHz(bytes)
-        self.maxRefreshHz = maxRefresh
-        self.maxPixelClockHz = [maxPixelClock, highestDTD].compactMap { $0 }.max()
+        // The 0xFD figures stay exactly what the descriptor said: they are the
+        // envelope, never a mode. The real top mode is the highest detailed
+        // timing, which for some monitors lives only in the CTA-861 extension
+        // block, so the scan covers that too.
+        self.rangeLimitMaxRefreshHz = maxRefresh
+        self.rangeLimitMaxPixelClockHz = maxPixelClock
+        self.topDetailedTiming = Self.highestDetailedTiming(bytes)
         self.monitorName = name
     }
 
-    /// Highest pixel clock (Hz) across every detailed timing descriptor in the
-    /// EDID: the four base-block slots and, when present, the CTA-861 extension
-    /// block's detailed timings. Returns nil when no detailed timing is found.
-    static func highestDTDPixelClockHz(_ bytes: [UInt8]) -> Int? {
-        var highest = 0
+    /// Decode the 18-byte detailed timing descriptor at `off`. Returns nil when
+    /// the slot is a display (text) descriptor instead, which a zero pixel-clock
+    /// word marks.
+    private static func detailedTiming(_ bytes: [UInt8], at off: Int) -> DetailedTiming? {
+        guard off + 17 < bytes.count else { return nil }
+        let pixelClock10kHz = Int(bytes[off]) | (Int(bytes[off + 1]) << 8)
+        guard pixelClock10kHz != 0 else { return nil }
+        let clockHz = pixelClock10kHz * 10_000
+        // Active / blanking are split across a low byte and a high nibble.
+        let hActive = Int(bytes[off + 2]) | ((Int(bytes[off + 4]) >> 4) << 8)
+        let hBlank  = Int(bytes[off + 3]) | ((Int(bytes[off + 4]) & 0x0F) << 8)
+        let vActive = Int(bytes[off + 5]) | ((Int(bytes[off + 7]) >> 4) << 8)
+        let vBlank  = Int(bytes[off + 6]) | ((Int(bytes[off + 7]) & 0x0F) << 8)
+        // EDID 1.4 detailed-timing border bytes: offset +15 is the
+        // horizontal border and +16 the vertical border, and each value
+        // is per side, so the active picture is flanked by two of them.
+        // Border pixels occupy pixel-clock cycles, so they widen the
+        // total period and must be counted (twice) in the refresh
+        // denominator — omitting them makes the rate read too high.
+        let hBorder = Int(bytes[off + 15])
+        let vBorder = Int(bytes[off + 16])
+        let hTotal = hActive + hBlank + 2 * hBorder
+        let vTotal = vActive + vBlank + 2 * vBorder
+        var refreshHz = 0
+        if hTotal > 0 && vTotal > 0 {
+            refreshHz = Int((Double(clockHz) / Double(hTotal * vTotal)).rounded())
+        }
+        return DetailedTiming(
+            width: hActive,
+            height: vActive,
+            refreshHz: refreshHz,
+            pixelClockHz: clockHz
+        )
+    }
+
+    /// The highest detailed timing in the EDID, by pixel clock: the four
+    /// base-block slots plus, when present, the CTA-861 extension block's
+    /// timings. This is the display's real top mode. Returns nil when the EDID
+    /// carries no detailed timing at all.
+    static func highestDetailedTiming(_ bytes: [UInt8]) -> DetailedTiming? {
+        var highest: DetailedTiming? = nil
+        func consider(_ off: Int) {
+            guard let timing = detailedTiming(bytes, at: off) else { return }
+            if timing.pixelClockHz > (highest?.pixelClockHz ?? 0) { highest = timing }
+        }
 
         // Base-block detailed timing slots.
-        for off in [54, 72, 90, 108] where off + 1 < bytes.count {
-            let pclk10kHz = Int(bytes[off]) | (Int(bytes[off + 1]) << 8)
-            if pclk10kHz > 0 { highest = max(highest, pclk10kHz * 10_000) }
+        for off in [54, 72, 90, 108] {
+            consider(off)
         }
 
         // Extension blocks. EDID can carry several 128-byte blocks (the count
@@ -195,12 +245,12 @@ public struct EDIDInfo: Hashable, Sendable {
             while off + 18 <= blockChecksum {
                 let pclk10kHz = Int(bytes[off]) | (Int(bytes[off + 1]) << 8)
                 if pclk10kHz == 0 { break } // padding marks the end
-                highest = max(highest, pclk10kHz * 10_000)
+                consider(off)
                 off += 18
             }
         }
 
-        return highest > 0 ? highest : nil
+        return highest
     }
 
     /// Decode a 13-byte EDID text payload (monitor name / serial). The string

@@ -1441,7 +1441,10 @@ struct JSONFormatterTests {
     func displayDTOAppears() throws {
         // makePort is portKey "2/1"; the DP node's parent must match so the
         // formatter correlates them. A 2-lane HBR2 link with the G34w-10 EDID
-        // falls short of its 100Hz ceiling -> belowMonitorMax.
+        // falls short of its real 3440x1440@100 mode -> belowMonitorMax. That
+        // mode is declared in the CTA-861 extension, so the base block alone is
+        // not enough: without it the panel reads as its 60 Hz preferred mode and
+        // the link comfortably carries it (issue #596).
         let dp = IOPortTransportStateDisplayPort(
             link: DisplayPortLink(
                 active: true, laneCount: 2, maxLaneCount: 4, linkRate: 3,
@@ -1449,7 +1452,9 @@ struct JSONFormatterTests {
             ),
             monitor: MonitorInfo(
                 manufacturerName: nil, productName: nil, productId: nil,
-                yearOfManufacture: nil, edid: Data(EDIDInfoTests.g34wBaseBlock)
+                yearOfManufacture: nil,
+                edid: Data(EDIDInfoTests.g34wBaseBlock
+                    + EDIDInfoTests.hexBytes(EDIDInfoTests.g34wExtensionHex))
             ),
             parentPortType: 2,
             parentPortNumber: 1

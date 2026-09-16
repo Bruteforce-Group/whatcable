@@ -7,14 +7,21 @@ struct DisplayDiagnosticTests {
 
     // MARK: - Fixtures
 
-    /// The G34w-10 as parsed by EDIDInfo: preferred 3440x1440@60, ceiling
-    /// 100Hz / 600 MHz. 600e6 x 24bpp = 14.4 Gbps usable needed.
+    /// The G34w-10 as parsed by EDIDInfo: preferred 3440x1440@60, with a real
+    /// 3440x1440@100 top timing at 600 MHz. 600e6 x 24bpp = 14.4 Gbps usable
+    /// needed. Its 0xFD envelope happens to sit at the same figures; the
+    /// `topDetailedTiming` is what the diagnostic reads, and without it this
+    /// fixture would quietly fall to its 60 Hz preferred mode and stop testing
+    /// the top-mode comparison at all.
     private let g34w = EDIDInfo(
         monitorName: "LEN G34w-10",
         versionMajor: 1, versionMinor: 3,
         preferredWidth: 3440, preferredHeight: 1440, preferredRefreshHz: 60,
         preferredPixelClockHz: 319_890_000,
-        maxRefreshHz: 100, maxPixelClockHz: 600_000_000
+        rangeLimitMaxRefreshHz: 100, rangeLimitMaxPixelClockHz: 600_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3440, height: 1440, refreshHz: 100, pixelClockHz: 600_000_000
+        )
     )
 
     private func makeDP(
@@ -199,10 +206,17 @@ struct DisplayDiagnosticTests {
 
     @Test("init(dp:) parses the embedded EDID end to end")
     func parsesEmbeddedEDID() throws {
-        let edidData = Data(EDIDInfoTests.g34wBaseBlock)
+        // Base block PLUS the CTA-861 extension. The G34w's 100 Hz mode is
+        // declared only in the extension; the base block alone carries a 60 Hz
+        // preferred timing and a 100 Hz 0xFD scan ceiling, and the ceiling is
+        // not a mode (issue #596). Feeding the base block alone would make this
+        // test assert 100 Hz from a number the panel never offered as a mode.
+        let edidData = Data(EDIDInfoTests.g34wBaseBlock
+            + EDIDInfoTests.hexBytes(EDIDInfoTests.g34wExtensionHex))
         let diag = try #require(DisplayDiagnostic(dp: makeDP(lanes: 4, edidData: edidData)))
         #expect(diag.bottleneck == .fine)
         #expect(diag.facts.monitorName == "LEN G34w-10")
+        // 100 Hz now comes from the real 3440x1440@100 detailed timing.
         #expect(diag.facts.maxRefreshHz == 100)
     }
 
@@ -295,7 +309,10 @@ struct DisplayDiagnosticTests {
         versionMajor: 1, versionMinor: 4,
         preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 240,
         preferredPixelClockHz: 2_340_000_000,
-        maxRefreshHz: 240, maxPixelClockHz: 2_340_000_000
+        rangeLimitMaxRefreshHz: 240, rangeLimitMaxPixelClockHz: 2_340_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 240, pixelClockHz: 2_340_000_000
+        )
     )
 
     @Test("4K240 at the DP ceiling (4-lane HBR3) reads as compression, not a warning")
@@ -322,7 +339,10 @@ struct DisplayDiagnosticTests {
             versionMajor: 1, versionMinor: 4,
             preferredWidth: 7680, preferredHeight: 4320, preferredRefreshHz: 60,
             preferredPixelClockHz: 4_170_000_000,
-            maxRefreshHz: 60, maxPixelClockHz: 4_170_000_000
+            rangeLimitMaxRefreshHz: 60, rangeLimitMaxPixelClockHz: 4_170_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 7680, height: 4320, refreshHz: 60, pixelClockHz: 4_170_000_000
+            )
         )
         let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
         let diag = try #require(DisplayDiagnostic(dp: dp, edid: huge))
@@ -406,7 +426,10 @@ struct DisplayDiagnosticTests {
             versionMajor: 1, versionMinor: 4,
             preferredWidth: 4096, preferredHeight: 2304, preferredRefreshHz: 60,
             preferredPixelClockHz: 600_000_000,
-            maxRefreshHz: 60, maxPixelClockHz: 600_000_000
+            rangeLimitMaxRefreshHz: 60, rangeLimitMaxPixelClockHz: 600_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 4096, height: 2304, refreshHz: 60, pixelClockHz: 600_000_000
+            )
         )
         let live = DisplayCurrentMode(width: 5120, height: 2880, refreshHz: 60)
         let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", tunneled: true, currentMode: live)
@@ -453,22 +476,61 @@ struct DisplayDiagnosticTests {
         #expect(edid.monitorName == "AORUS FO32U2P")
         #expect(edid.preferredWidth == 3840)
         #expect(edid.preferredHeight == 2160)
-        #expect(edid.maxRefreshHz == 240)
+        #expect(edid.rangeLimitMaxRefreshHz == 240)
         // Product id (EDID bytes 10-11) is 0x3215 = 12821, the corpus value.
         #expect(Self.fo32RealEDID[10] == 0x15 && Self.fo32RealEDID[11] == 0x32)
     }
 
     @Test("Real corpus EDID at the DP ceiling without a live mode stays compressionPlausible")
     func corpusEDIDCompressionPlausible() throws {
-        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", edidData: Self.fo32RealEDID)
+        // CoreGraphics supplies the 4K240 top mode, exactly as it does on the
+        // live app path. The EDID cannot: see
+        // `corpusEDIDWithoutCoreGraphicsReadsItsParsedTimings` below.
+        let top = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 240)
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)",
+                        edidData: Self.fo32RealEDID, maxMode: top)
         let diag = try #require(DisplayDiagnostic(dp: dp))
         #expect(diag.bottleneck == .compressionPlausible)
+    }
+
+    @Test("Real corpus EDID with no CoreGraphics data admits its top mode is unreadable")
+    func corpusEDIDWithoutCoreGraphicsReadsItsParsedTimings() throws {
+        // The FO32U2P's 240 Hz modes live in a DisplayID extension block this
+        // parser does not read; its highest 18-byte detailed timing is 4K60 at
+        // 533.25 MHz. Before issue #596 the 0xFD envelope (2.34 GHz) stood in
+        // for the top mode and happened to be right for this panel; it was
+        // wrong for the AOC U24P10R and 10x wrong for the ASUS PG27AQDP, so it
+        // is gone as a mode source.
+        //
+        // What it still is, is evidence: a panel accepting 4.39x the pixel
+        // clock of anything it declares as a timing has modes we cannot see. So
+        // the bandwidth figure stays the one real timing we parsed (the
+        // envelope never becomes a number we quote), but the verdict refuses to
+        // call that full quality. `corpusEDIDCompressionPlausible` above is the
+        // same EDID WITH the CoreGraphics top mode, which is the live app's
+        // usual path.
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", edidData: Self.fo32RealEDID)
+        let diag = try #require(DisplayDiagnostic(dp: dp))
+        #expect(diag.bottleneck == .unknownMode)
+        #expect(diag.isWarning == false)
+        // The ladder itself still resolves the one real timing we parsed (the
+        // envelope never becomes a number we quote)...
+        let edid = try #require(EDIDInfo(Data(Self.fo32RealEDID)))
+        let top = DisplayDiagnostic.topMode(maxMode: nil, edid: edid)
+        #expect(top.pixelClockHz == 533_250_000, "expected the 533.25 MHz 4K60 timing, got \(top.pixelClockHz)")
+        // ...but a verdict that says the capabilities aren't readable does not
+        // then quote a "top mode needs" figure it just declined to stand up.
+        #expect(diag.facts.neededGbps == nil,
+                "unknownMode must not carry a top-mode bandwidth, got \(String(describing: diag.facts.neededGbps))")
+        #expect(diag.facts.maxRefreshHz == nil,
+                "unknownMode must not carry a top-mode refresh, got \(String(describing: diag.facts.maxRefreshHz))")
     }
 
     @Test("Real corpus EDID plus a matched 4K240 live mode confirms full quality")
     func corpusEDIDUpgradesWithLiveMode() throws {
         let live = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 240)
-        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", edidData: Self.fo32RealEDID, currentMode: live)
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)",
+                        edidData: Self.fo32RealEDID, currentMode: live, maxMode: live)
         let diag = try #require(DisplayDiagnostic(dp: dp))
         #expect(diag.bottleneck == .fine)
         #expect(diag.detail.contains("3840 x 2160 @ 240Hz"))
@@ -476,16 +538,22 @@ struct DisplayDiagnosticTests {
 
     // MARK: - CoreGraphics max mode as the authoritative top-mode reference
 
-    /// An EDID whose range-limits descriptor is absent, so its only idea of the
-    /// "top mode" is the 60Hz preferred mode, understating a 240Hz panel. The
-    /// high max pixel clock forces the link short of the uncompressed top so the
-    /// compression branch (where the at-top-mode check runs) is reached.
+    /// An EDID that understates a 240Hz panel: its highest detailed timing is
+    /// 4K120, so EDID-only reasoning tops out there and only CoreGraphics knows
+    /// the panel really reaches 240. The 1.3 GHz top timing also keeps the link
+    /// short of the uncompressed top, so the compression branch (where the
+    /// at-top-mode check runs) is reached rather than short-circuiting on
+    /// `.fine`. Its range-limits refresh is absent on purpose, proving the
+    /// diagnostic no longer needs it.
     private let understatedEdid = EDIDInfo(
         monitorName: "Understated 4K",
         versionMajor: 1, versionMinor: 4,
         preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
         preferredPixelClockHz: 533_000_000,
-        maxRefreshHz: nil, maxPixelClockHz: 2_340_000_000
+        rangeLimitMaxRefreshHz: nil, rangeLimitMaxPixelClockHz: 2_340_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 120, pixelClockHz: 1_300_000_000
+        )
     )
 
     @Test("With no CG max mode, an understated EDID top falsely confirms a 120Hz mode")
@@ -550,7 +618,10 @@ struct DisplayDiagnosticTests {
         versionMajor: 1, versionMinor: 4,
         preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
         preferredPixelClockHz: 533_000_000,
-        maxRefreshHz: 120, maxPixelClockHz: 1_100_000_000
+        rangeLimitMaxRefreshHz: 120, rangeLimitMaxPixelClockHz: 1_100_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 120, pixelClockHz: 1_100_000_000
+        )
     )
 
     @Test("4K120 over a 2-lane HBR3 link with DSC active reads as compressionActive, not a shortfall")
@@ -806,7 +877,10 @@ struct DisplayDiagnosticTests {
             versionMajor: 1, versionMinor: 4,
             preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 120,
             preferredPixelClockHz: 1_300_000_000,
-            maxRefreshHz: 120, maxPixelClockHz: 1_300_000_000
+            rangeLimitMaxRefreshHz: 120, rangeLimitMaxPixelClockHz: 1_300_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 3840, height: 2160, refreshHz: 120, pixelClockHz: 1_300_000_000
+            )
         )
         let dp = makeHDMIPortDP()
         let diag = try #require(DisplayDiagnostic(dp: dp, edid: panel))
@@ -828,7 +902,10 @@ struct DisplayDiagnosticTests {
             versionMajor: 1, versionMinor: 4,
             preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 120,
             preferredPixelClockHz: 1_300_000_000,
-            maxRefreshHz: 120, maxPixelClockHz: 1_300_000_000
+            rangeLimitMaxRefreshHz: 120, rangeLimitMaxPixelClockHz: 1_300_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 3840, height: 2160, refreshHz: 120, pixelClockHz: 1_300_000_000
+            )
         )
         let dp = makeHDMIPortDP()
         let diag = try #require(DisplayDiagnostic(dp: dp, edid: panel))
@@ -913,5 +990,454 @@ struct DisplayDiagnosticTests {
         let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "1.62 Gbps (RBR)")
         let diag = try #require(DisplayDiagnostic(dp: dp, edid: g34w, cable: identity, port: nil))
         #expect(diag.cableAssessment == .inconclusive)
+    }
+
+    // MARK: - Issue #596: the 0xFD envelope is a range, not a mode
+
+    /// AOC U24P10R, the panel in issue #596. A 4K60 monitor whose 0xFD
+    /// range-limits descriptor declares a 75 Hz / 600 MHz envelope it has no
+    /// mode for. Its only real top mode is the 4K60 detailed timing at
+    /// 533.25 MHz.
+    private let aocU24P10R = EDIDInfo(
+        monitorName: "AOC U24P10R",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
+        preferredPixelClockHz: 533_250_000,
+        rangeLimitMaxRefreshHz: 75, rangeLimitMaxPixelClockHz: 600_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 60, pixelClockHz: 533_250_000
+        )
+    )
+
+    @Test("Issue #596: a 4K60 panel is never told it can run the 75Hz its 0xFD envelope declares")
+    func envelopeRefreshIsNotClaimedAsAMode() throws {
+        // 2 of 4 lanes at HBR3: delivered = 2 x 8.1 x 0.8 = 12.96 Gbps. The
+        // envelope route asks for 600 MHz x 24bpp = 14.4 Gbps and warns. The
+        // panel's real 4K60 timing asks for 533.25 MHz x 24bpp = 12.80 Gbps,
+        // which this link carries, so the correct verdict is silence.
+        let dp = makeDP(lanes: 2, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: aocU24P10R))
+        #expect(diag.bottleneck == .fine)
+        #expect(diag.isWarning == false)
+        #expect(diag.facts.maxRefreshHz == 60)
+        #expect(!diag.detail.contains("75"), "the 75Hz scan ceiling must never reach the user as a mode")
+        #expect(!diag.summary.contains("75"))
+        let needed = try #require(diag.facts.neededGbps)
+        #expect(abs(needed - 12.798) < 0.01)
+    }
+
+    /// ASUS PG27AQDP, from customer probe `m1pro_macos26.5_y`: the corpus's
+    /// worst envelope overstatement. Its 0xFD descriptor declares a 2.52 GHz /
+    /// 225 Hz envelope while its highest real detailed timing is 2560x1440@60
+    /// at 248.87 MHz, a 10x gap in pixel clock.
+    private let pg27AQDP = EDIDInfo(
+        monitorName: "PG27AQDP",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 2560, preferredHeight: 1440, preferredRefreshHz: 60,
+        preferredPixelClockHz: 241_500_000,
+        rangeLimitMaxRefreshHz: 225, rangeLimitMaxPixelClockHz: 2_520_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 2560, height: 1440, refreshHz: 60, pixelClockHz: 248_870_000
+        )
+    )
+
+    @Test("The corpus's worst envelope overstatement stops claiming 60 Gbps")
+    func worstEnvelopeOverstatementReadsItsRealTopMode() throws {
+        // Envelope route: 2.52 GHz x 24bpp = 60.48 Gbps, a figure no
+        // DisplayPort link on any Mac could ever carry. Real top timing:
+        // 248.87 MHz x 24bpp = 5.97 Gbps.
+        let top = DisplayDiagnostic.topMode(maxMode: nil, edid: pg27AQDP)
+        let needed = Double(top.pixelClockHz) * Double(DisplayDiagnostic.assumedBitsPerPixel) / 1_000_000_000
+        #expect(abs(needed - 5.973) < 0.05, "expected ~6.0 Gbps, got \(needed)")
+        // The 10x gap is also the strongest evidence in the corpus that this
+        // panel has modes the parser cannot see (a 1440p480 monitor whose only
+        // parsed timing is 1440p60), so with no CoreGraphics top mode the
+        // verdict declines to call the link fine, and quotes no top-mode
+        // figure at all: neither the 60 Gbps of old nor the 6 Gbps it cannot
+        // stand up.
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: pg27AQDP))
+        #expect(diag.bottleneck == .unknownMode)
+        #expect(diag.isWarning == false)
+        #expect(diag.facts.neededGbps == nil,
+                "unknownMode must not carry a top-mode bandwidth, got \(String(describing: diag.facts.neededGbps))")
+    }
+
+    @Test("A CG max mode above every EDID timing scales up by the panel's own blanking ratio")
+    func maxModeAboveEDIDScalesByBlankingRatio() throws {
+        // Issue #249's shape: a 5K panel whose EDID cannot describe its native
+        // mode. CoreGraphics is authoritative about WHICH mode is top, but it
+        // reports active pixels only, so the pixel clock has to be scaled up
+        // from the panel's own blanking ratio rather than used bare.
+        let studio = EDIDInfo(
+            monitorName: "Studio Display",
+            versionMajor: 1, versionMinor: 4,
+            preferredWidth: 4096, preferredHeight: 2304, preferredRefreshHz: 60,
+            preferredPixelClockHz: 600_000_000,
+            rangeLimitMaxRefreshHz: 60, rangeLimitMaxPixelClockHz: 600_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 4096, height: 2304, refreshHz: 60, pixelClockHz: 600_000_000
+            )
+        )
+        let top = DisplayCurrentMode(width: 5120, height: 2880, refreshHz: 60)
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)",
+                        tunneled: true, currentMode: top, maxMode: top)
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: studio))
+        let needed = try #require(diag.facts.neededGbps)
+        // CoreGraphics' bare active-pixel rate for 5K60 is 5120x2880x60 =
+        // 884.7 Mpx/s, 21.23 Gbps at 24bpp. The wire carries blanking too, so
+        // the figure must land ABOVE that, never below it.
+        let bareActiveGbps = 5120.0 * 2880.0 * 60.0 * 24.0 / 1_000_000_000
+        #expect(needed > bareActiveGbps, "expected above \(bareActiveGbps), got \(needed)")
+        // The panel's own blanking ratio is 600e6 / (4096x2304x60) = 1.0596.
+        #expect(abs(needed - bareActiveGbps * 1.0596) < 0.1)
+        #expect(diag.facts.maxRefreshHz == 60)
+    }
+
+    @Test("With no CG max mode the top detailed timing drives both numbers, envelope ignored")
+    func noMaxModeUsesTopDetailedTimingNotEnvelope() throws {
+        // Rung 3: no CoreGraphics data at all. The highest detailed timing is
+        // the only mode evidence there is, and the 0xFD envelope is ignored
+        // even though it sits well above it.
+        let panel = EDIDInfo(
+            monitorName: "Rung 3 panel",
+            versionMajor: 1, versionMinor: 4,
+            preferredWidth: 2560, preferredHeight: 1440, preferredRefreshHz: 60,
+            preferredPixelClockHz: 241_500_000,
+            rangeLimitMaxRefreshHz: 144, rangeLimitMaxPixelClockHz: 1_200_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 2560, height: 1440, refreshHz: 120, pixelClockHz: 497_750_000
+            )
+        )
+        let dp = makeDP(lanes: 2, maxLanes: 4, rateDesc: "5.4 Gbps (HBR2)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: panel))
+        #expect(diag.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(diag.facts.maxRefreshHz == 120)
+        let needed = try #require(diag.facts.neededGbps)
+        #expect(abs(needed - 11.946) < 0.01, "expected the 497.75 MHz timing, got \(needed) Gbps")
+        #expect(diag.bottleneck == .belowMonitorMax)
+        #expect(diag.detail.contains("120Hz"))
+        #expect(!diag.detail.contains("144"), "the 144Hz envelope must never reach the user")
+    }
+
+    // MARK: - Issue #596: an envelope far above every parsed timing is unreadable, not fine
+
+    /// AORUS FO32U2P, from customer probe `m2pro_macos26.6`, as figures. Its
+    /// 240 Hz modes live in a DisplayID extension block the EDID parser does
+    /// not read, so the best timing it can see is the 4K60 at 533.25 MHz while
+    /// the 0xFD envelope declares 2.34 GHz: 4.39x.
+    private let fo32EnvelopeFarAbove = EDIDInfo(
+        monitorName: "AORUS FO32U2P",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
+        preferredPixelClockHz: 533_250_000,
+        rangeLimitMaxRefreshHz: 240, rangeLimitMaxPixelClockHz: 2_340_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 60, pixelClockHz: 533_250_000
+        )
+    )
+
+    @Test("An envelope 4.39x the best parsed timing means the top mode is unknown, not fine")
+    func envelopeFarAboveParsedTopReadsUnknownMode() throws {
+        // No CoreGraphics top mode, so the ladder falls to the highest parsed
+        // detailed timing: 533.25 MHz x 24bpp = 12.80 Gbps, which this link
+        // carries. Reading that as "full quality" would be a false all-clear:
+        // the panel accepts a pixel clock 4.39x anything it declares as a
+        // timing, so it has modes this parser cannot see.
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: fo32EnvelopeFarAbove))
+        #expect(diag.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(diag.bottleneck == .unknownMode,
+                "an unreadable top mode must not read as full quality, got \(diag.bottleneck)")
+        #expect(diag.isWarning == false, "unknownMode neither warns nor reassures")
+        #expect(!diag.detail.contains("Nothing is holding the picture back"),
+                "the all-clear wording must not reach a display whose top mode we cannot read")
+    }
+
+    @Test("An unreadable top mode carries no top-mode figures for the Pro receipts")
+    func unreadableTopModeCarriesNoTopModeFigures() throws {
+        // The Pro Display window prints "Top mode needs N Gbps" and "up to
+        // NHz" from these two facts, directly under a verdict that says the
+        // display's capabilities aren't readable. A figure we have just
+        // declined to stand up must not be presented, so both are nil here,
+        // as they are on the no-readable-EDID path. The link facts stay: they
+        // are what the verdict says it is reporting.
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: fo32EnvelopeFarAbove))
+        #expect(diag.bottleneck == .unknownMode, "fixture guard: got \(diag.bottleneck)")
+        #expect(diag.facts.neededGbps == nil,
+                "unknownMode must not carry a top-mode bandwidth, got \(String(describing: diag.facts.neededGbps))")
+        #expect(diag.facts.maxRefreshHz == nil,
+                "unknownMode must not carry a top-mode refresh, got \(String(describing: diag.facts.maxRefreshHz))")
+        #expect(diag.facts.deliveredGbps != nil, "the link figure is what the verdict reports, keep it")
+        #expect(diag.facts.monitorName == "AORUS FO32U2P")
+    }
+
+    /// The reporter's own panel in issue #596, at his exact figures: a 600 MHz
+    /// envelope against a 533.16 MHz parsed timing, a ratio of 1.13. Blanking
+    /// and a loosely-specified range account for a gap that size, so this panel
+    /// must stay on the ordinary ladder.
+    private let reporterU24P10R = EDIDInfo(
+        monitorName: "U24P10R",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
+        preferredPixelClockHz: 533_160_000,
+        rangeLimitMaxRefreshHz: 75, rangeLimitMaxPixelClockHz: 600_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 60, pixelClockHz: 533_160_000
+        )
+    )
+
+    @Test("Issue #596's own reporter is not swept up: a 1.13x envelope stays fine")
+    func reporterEnvelopeUnderThresholdStaysFine() throws {
+        // 4 of 4 lanes at HBR3 carries 25.92 Gbps; the panel's real 4K60 mode
+        // needs 533.16 MHz x 24bpp = 12.80 Gbps. The fix for his bug must leave
+        // him with the all-clear, not trade one wrong answer for another.
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: reporterU24P10R))
+        #expect(diag.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(diag.bottleneck == .fine,
+                "a 1.13x envelope is ordinary blanking headroom, got \(diag.bottleneck)")
+        #expect(diag.facts.maxRefreshHz == 60)
+        #expect(!diag.detail.contains("75"), "the 75Hz scan ceiling must never reach the user as a mode")
+        #expect(!diag.summary.contains("75"))
+    }
+
+    @Test("A CoreGraphics top mode overrides the envelope check entirely")
+    func maxModePresentOverridesEnvelopeCheck() throws {
+        // Same panel and same 4.39x envelope as the unknownMode test above, but
+        // now macOS names the top mode, and we trust it completely whatever the
+        // envelope says.
+        //
+        // (a) CoreGraphics says the top mode is the 4K60 the EDID describes.
+        // The link carries it, so the all-clear stands: the envelope check must
+        // not fire and turn this into .unknownMode. This is the case that
+        // isolates the check's maxMode condition, because it is the only one
+        // where the .fine branch is reached with a CoreGraphics mode present.
+        let cg60 = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 60)
+        let dp60 = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", maxMode: cg60)
+        let a = try #require(DisplayDiagnostic(dp: dp60, edid: fo32EnvelopeFarAbove))
+        #expect(a.bottleneck == .fine,
+                "a CoreGraphics top mode must switch the envelope check off, got \(a.bottleneck)")
+        #expect(a.facts.maxRefreshHz == 60)
+
+        // (b) CoreGraphics says 4K240 instead. The ladder scales that by the
+        // panel's own blanking ratio to ~51 Gbps against 25.92 carried at the
+        // DP ceiling, so the verdict is the ordinary compression carve-out --
+        // never .unknownMode.
+        let cg240 = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 240)
+        let dp240 = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", maxMode: cg240)
+        let b = try #require(DisplayDiagnostic(dp: dp240, edid: fo32EnvelopeFarAbove))
+        #expect(b.bottleneck != .unknownMode,
+                "a CoreGraphics top mode must switch the envelope check off")
+        #expect(b.bottleneck == .compressionPlausible,
+                "expected the ordinary ladder verdict, got \(b.bottleneck)")
+        #expect(b.facts.maxRefreshHz == 240)
+    }
+
+    /// MSI MAG274Q QD E2's shape, from customer probe `m1pro_macos26.5.2_z`:
+    /// best parsed timing 2560x1440@120 at 497.75 MHz, envelope 720 MHz, a
+    /// ratio of 1.447. Its real 180 Hz top mode (746.64 MHz) is declared in a
+    /// DisplayID block this parser does not read. Rounded here to a clean
+    /// 1.45x so the test is about the boundary, not the panel.
+    private let envelopeAt145 = EDIDInfo(
+        monitorName: "MAG274Q QD E2",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 2560, preferredHeight: 1440, preferredRefreshHz: 60,
+        preferredPixelClockHz: 241_500_000,
+        rangeLimitMaxRefreshHz: 180, rangeLimitMaxPixelClockHz: 725_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 2560, height: 1440, refreshHz: 120, pixelClockHz: 500_000_000
+        )
+    )
+
+    @Test("An envelope 1.45x the best parsed timing is over the line: unknownMode, not fine")
+    func envelopeAt145xReadsUnknownMode() throws {
+        // 2 of 4 lanes at HBR3 carries 12.96 Gbps; the parsed 1440p120 timing
+        // needs 12.0 Gbps, so on the parsed timing alone this link reads fine.
+        // The panel's real 180 Hz mode needs about 17.9 Gbps, a shortfall the
+        // diagnostic exists to report, so the all-clear here is a false one.
+        // The threshold sits at 1.4 because the MSI MAG274Q QD E2 (1.447x)
+        // and Sceptre O34 (1.463x) both hide real 165-180 Hz modes under 1.5.
+        let dp = makeDP(lanes: 2, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: envelopeAt145))
+        #expect(diag.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(diag.bottleneck == .unknownMode,
+                "a 1.45x envelope must read as unreadable, got \(diag.bottleneck)")
+        #expect(diag.isWarning == false)
+    }
+
+    @Test("No envelope, or no parsed timing: nothing to compare, behaviour unchanged")
+    func nothingToCompareLeavesTheVerdictAlone() throws {
+        // (a) No 0xFD envelope at all. The gap that triggers the check cannot
+        // be measured, so the parsed 4K60 timing stands and the verdict is fine.
+        let noEnvelope = EDIDInfo(
+            monitorName: "No envelope",
+            versionMajor: 1, versionMinor: 4,
+            preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
+            preferredPixelClockHz: 533_250_000,
+            rangeLimitMaxRefreshHz: nil, rangeLimitMaxPixelClockHz: nil,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 3840, height: 2160, refreshHz: 60, pixelClockHz: 533_250_000
+            )
+        )
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let a = try #require(DisplayDiagnostic(dp: dp, edid: noEnvelope))
+        #expect(a.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(a.bottleneck == .fine, "no envelope means no comparison to make, got \(a.bottleneck)")
+
+        // (b) A huge envelope but no detailed timing anywhere (an EDID carrying
+        // only standard timings). Rung 4 uses the preferred mode, and again
+        // there is no parsed top timing to compare the envelope against.
+        let noTiming = EDIDInfo(
+            monitorName: "No detailed timing",
+            versionMajor: 1, versionMinor: 4,
+            preferredWidth: 1920, preferredHeight: 1080, preferredRefreshHz: 60,
+            preferredPixelClockHz: 148_500_000,
+            rangeLimitMaxRefreshHz: 240, rangeLimitMaxPixelClockHz: 2_340_000_000,
+            topDetailedTiming: nil
+        )
+        let b = try #require(DisplayDiagnostic(dp: dp, edid: noTiming))
+        #expect(b.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(b.bottleneck == .fine, "no parsed timing means no comparison to make, got \(b.bottleneck)")
+    }
+
+    // MARK: - The top mode's refresh is shown with the top mode's own resolution
+
+    /// Samsung Odyssey G60SD's shape, from customer probe `m5_macos27.0_p`:
+    /// preferred 2560x1440@60, and a fastest timing of 1920x1080@240 that
+    /// wins `topDetailedTiming` on pixel clock. There is no 2560x1440@240
+    /// mode, so a heading reading "2560 x 1440 · up to 240Hz" names a mode
+    /// the panel does not have. Ten corpus panels share the shape.
+    private let odysseyG60SD = EDIDInfo(
+        monitorName: "Odyssey G60SD",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 2560, preferredHeight: 1440, preferredRefreshHz: 60,
+        preferredPixelClockHz: 241_500_000,
+        rangeLimitMaxRefreshHz: 240, rangeLimitMaxPixelClockHz: 600_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 1920, height: 1080, refreshHz: 240, pixelClockHz: 583_000_000
+        )
+    )
+
+    @Test("A top timing at a lower resolution than preferred carries its own resolution next to its refresh")
+    func topModeRefreshIsPairedWithItsOwnResolution() throws {
+        // No CoreGraphics data, so rung 3: the 1920x1080@240 timing is the top
+        // mode, and the facts the Pro heading is built from must say 1920 x
+        // 1080 with 240, never 2560 x 1440 with 240.
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)")
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: odysseyG60SD))
+        #expect(diag.facts.maxMode == nil, "fixture guard: this path has no CoreGraphics data")
+        #expect(diag.facts.maxRefreshHz == 240)
+        #expect(diag.facts.topModeWidth == 1920,
+                "the 240 Hz mode is 1920 wide, got \(String(describing: diag.facts.topModeWidth))")
+        #expect(diag.facts.topModeHeight == 1080,
+                "the 240 Hz mode is 1080 high, got \(String(describing: diag.facts.topModeHeight))")
+        // The preferred mode is still reported as itself.
+        #expect(diag.facts.preferredWidth == 2560)
+        #expect(diag.facts.preferredHeight == 1440)
+    }
+
+    @Test("The top mode's resolution follows the rung that resolved it")
+    func topModeResolutionFollowsTheRung() throws {
+        // Rungs 1-2: CoreGraphics names a 5K mode above every timing, so the
+        // resolution is CoreGraphics' 5120 x 2880, not the EDID's 4096 x 2304.
+        let studio = EDIDInfo(
+            monitorName: "Studio Display",
+            versionMajor: 1, versionMinor: 4,
+            preferredWidth: 4096, preferredHeight: 2304, preferredRefreshHz: 60,
+            preferredPixelClockHz: 600_000_000,
+            rangeLimitMaxRefreshHz: 60, rangeLimitMaxPixelClockHz: 600_000_000,
+            topDetailedTiming: EDIDInfo.DetailedTiming(
+                width: 4096, height: 2304, refreshHz: 60, pixelClockHz: 600_000_000
+            )
+        )
+        let top = DisplayCurrentMode(width: 5120, height: 2880, refreshHz: 60)
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", tunneled: true, maxMode: top)
+        let cg = try #require(DisplayDiagnostic(dp: dp, edid: studio))
+        #expect(cg.facts.topModeWidth == 5120, "got \(String(describing: cg.facts.topModeWidth))")
+        #expect(cg.facts.topModeHeight == 2880, "got \(String(describing: cg.facts.topModeHeight))")
+
+        // Rung 4: no detailed timing at all, so the preferred mode is the top
+        // mode and carries its own resolution.
+        let noTiming = EDIDInfo(
+            monitorName: "No detailed timing",
+            versionMajor: 1, versionMinor: 4,
+            preferredWidth: 1920, preferredHeight: 1080, preferredRefreshHz: 60,
+            preferredPixelClockHz: 148_500_000,
+            rangeLimitMaxRefreshHz: nil, rangeLimitMaxPixelClockHz: nil,
+            topDetailedTiming: nil
+        )
+        let plain = try #require(DisplayDiagnostic(dp: makeDP(), edid: noTiming))
+        #expect(plain.facts.topModeWidth == 1920)
+        #expect(plain.facts.topModeHeight == 1080)
+        #expect(plain.facts.maxRefreshHz == 60)
+    }
+
+    // MARK: - A CoreGraphics max mode may raise the top mode, never lower it
+
+    /// A 4K60 panel as its EDID declares it: one real 4K60 detailed timing at
+    /// 533.25 MHz. The `maxMode` in the tests below is what CoreGraphics may
+    /// report for it on a 2-lane link that cannot carry 4K60: the mode list is
+    /// the one System Settings shows, and it shrinks with the link.
+    private let fourK60Panel = EDIDInfo(
+        monitorName: "4K60 panel",
+        versionMajor: 1, versionMinor: 4,
+        preferredWidth: 3840, preferredHeight: 2160, preferredRefreshHz: 60,
+        preferredPixelClockHz: 533_250_000,
+        rangeLimitMaxRefreshHz: 75, rangeLimitMaxPixelClockHz: 600_000_000,
+        topDetailedTiming: EDIDInfo.DetailedTiming(
+            width: 3840, height: 2160, refreshHz: 60, pixelClockHz: 533_250_000
+        )
+    )
+
+    @Test("A CG max mode below the EDID's top timing is link-limited and must not read as fine")
+    func linkLimitedMaxModeDoesNotReadAsFine() throws {
+        // 2 of 4 lanes at HBR2 carries 8.64 Gbps. The panel's real 4K60 mode
+        // needs 12.80 Gbps, so this is the textbook shortfall the diagnostic
+        // exists to report. CoreGraphics names 4K30 as the top mode because
+        // 4K30 is all this link can carry: that describes the link, not the
+        // panel. Taking it as the top mode would clear the link against a
+        // 6.4 Gbps figure and reassure the user about the exact cap they came
+        // to ask about.
+        let linkLimited = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 30)
+        let dp = makeDP(lanes: 2, maxLanes: 4, rateDesc: "5.4 Gbps (HBR2)", maxMode: linkLimited)
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: fourK60Panel))
+        #expect(diag.bottleneck != .fine,
+                "a 4K60 panel on a link that carries 4K30 is not at full quality, got \(diag.bottleneck)")
+        #expect(diag.bottleneck == .belowMonitorMax, "got \(diag.bottleneck)")
+        #expect(diag.facts.maxRefreshHz == 60,
+                "the top mode is the panel's 60 Hz, not the link's 30, got \(String(describing: diag.facts.maxRefreshHz))")
+        let needed = try #require(diag.facts.neededGbps)
+        #expect(abs(needed - 12.798) < 0.01, "expected the 4K60 timing's 12.8 Gbps, got \(needed)")
+    }
+
+    @Test("A CG max mode matching the EDID's top timing still takes rung 1")
+    func matchingMaxModeStillTakesRungOne() throws {
+        // Same panel, and CoreGraphics agrees with the EDID that 4K60 is top.
+        // 4 of 4 lanes at HBR3 carries 25.92 Gbps, so the all-clear stands,
+        // with the timing's own pixel clock behind the figure.
+        let cg60 = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 60)
+        let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", maxMode: cg60)
+        let diag = try #require(DisplayDiagnostic(dp: dp, edid: fourK60Panel))
+        #expect(diag.bottleneck == .fine, "got \(diag.bottleneck)")
+        #expect(diag.facts.maxRefreshHz == 60)
+        let needed = try #require(diag.facts.neededGbps)
+        #expect(abs(needed - 12.798) < 0.01, "expected the 4K60 timing's 12.8 Gbps, got \(needed)")
+    }
+
+    @Test("meetsTopMode: a live 4K30 against a link-limited 4K30 max mode is not the panel's top")
+    func meetsTopModeUsesTheHigherOfMaxModeAndTiming() throws {
+        // CoreGraphics says the top is 4K30 and the live mode is 4K30, so on a
+        // CG-only reading the display is "at its top mode". The EDID declares
+        // a 4K60 timing, a mode the panel really has, so the reference is the
+        // higher of the two and 4K30 falls short of it.
+        let live = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 30)
+        let linkLimited = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 30)
+        #expect(DisplayDiagnostic.meetsTopMode(live, maxMode: linkLimited, edid: fourK60Panel) == false,
+                "4K30 is not the top mode of a panel with a 4K60 timing")
+        // And with CoreGraphics agreeing on 4K60, a live 4K60 does meet it.
+        let cg60 = DisplayCurrentMode(width: 3840, height: 2160, refreshHz: 60)
+        #expect(DisplayDiagnostic.meetsTopMode(cg60, maxMode: cg60, edid: fourK60Panel) == true)
     }
 }

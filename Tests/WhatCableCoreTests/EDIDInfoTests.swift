@@ -67,8 +67,8 @@ struct EDIDInfoTests {
         // This is the load-bearing assertion: the monitor's ceiling is 100 Hz
         // / 600 MHz, far above its 60 Hz preferred mode. The diagnostic must
         // compare the link against this, not the preferred mode.
-        #expect(edid.maxRefreshHz == 100)
-        #expect(edid.maxPixelClockHz == 600_000_000)
+        #expect(edid.rangeLimitMaxRefreshHz == 100)
+        #expect(edid.rangeLimitMaxPixelClockHz == 600_000_000)
     }
 
     // MARK: - CTA-861 extension
@@ -81,7 +81,7 @@ struct EDIDInfoTests {
         // The extension's detailed timings are all below the base block's, so
         // the preferred mode and the ceiling are identical to the base parse.
         #expect(edid.preferredWidth == 3440)
-        #expect(edid.maxPixelClockHz == 600_000_000)
+        #expect(edid.rangeLimitMaxPixelClockHz == 600_000_000)
     }
 
     @Test("Detailed-timing scan reads both base and extension descriptors")
@@ -93,15 +93,33 @@ struct EDIDInfoTests {
         // (600 MHz) still covers it, so the diagnostic's max is unchanged, but
         // this proves the extension scan reads a real higher mode that the base
         // block alone misses.
-        #expect(EDIDInfo.highestDTDPixelClockHz(bytes) == 533_160_000)
+        let top = EDIDInfo.highestDetailedTiming(bytes)
+        #expect(top?.pixelClockHz == 533_160_000)
+        #expect(top?.width == 3440)
+        #expect(top?.height == 1440)
     }
 
-    @Test("A higher mode in the CTA extension raises the max ceiling")
-    func extensionModeRaisesCeiling() throws {
+    @Test("The 0xFD ceiling sits above every real timing, and reads as its own figure")
+    func ceilingIsNotAMode() throws {
+        // The #596 shape: the envelope is higher than any mode the panel has.
+        // The G34w declares a 600 MHz pixel-clock ceiling in its 0xFD
+        // descriptor while its top real timing is 533.16 MHz. The two must not
+        // be conflated: one is what the panel will accept, the other is what it
+        // can actually show.
+        let bytes = Self.g34wBaseBlock + Self.hexBytes(Self.g34wExtensionHex)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.rangeLimitMaxPixelClockHz == 600_000_000)
+        #expect(edid.topDetailedTiming?.pixelClockHz == 533_160_000)
+        #expect(edid.rangeLimitMaxPixelClockHz != edid.topDetailedTiming?.pixelClockHz)
+    }
+
+    @Test("A mode declared only in the CTA extension becomes the top detailed timing")
+    func extensionModeBecomesTopTiming() throws {
         // Base block (0xFD ceiling = 600 MHz) plus a synthetic CTA extension
         // whose detailed timing is 640 MHz, above the base ceiling. This is the
         // case that needs the extension scan: a real monitor where the top mode
-        // lives only in the extension. The max must follow it.
+        // lives only in the extension. The top timing must follow it, while the
+        // 0xFD envelope stays exactly what the descriptor said.
         var bytes = Self.g34wBaseBlock
         var ext = [UInt8](repeating: 0, count: 128)
         ext[0] = 0x02 // CTA-861 tag
@@ -114,7 +132,10 @@ struct EDIDInfoTests {
         ext[6] = 0x80 // arbitrary non-zero h-active, irrelevant to the scan
         bytes.append(contentsOf: ext)
         let edid = try #require(EDIDInfo(Data(bytes)))
-        #expect(edid.maxPixelClockHz == 640_000_000)
+        #expect(edid.topDetailedTiming?.pixelClockHz == 640_000_000)
+        // And the envelope is byte 9 of the 0xFD descriptor, nothing else:
+        // a higher detailed timing never raises it.
+        #expect(edid.rangeLimitMaxPixelClockHz == 600_000_000)
     }
 
     @Test("Parses the monitor name and EDID version")
@@ -135,8 +156,8 @@ struct EDIDInfoTests {
         #expect(edid.preferredHeight == 2160)
         // 0xFD range-limits ceiling: 60 Hz, 600 MHz max pixel clock. The CTA
         // extensions carry only lower modes, so the ceiling is unchanged.
-        #expect(edid.maxRefreshHz == 60)
-        #expect(edid.maxPixelClockHz == 600_000_000)
+        #expect(edid.rangeLimitMaxRefreshHz == 60)
+        #expect(edid.rangeLimitMaxPixelClockHz == 600_000_000)
     }
 
     @Test("Rejects a blob with a bad header")
