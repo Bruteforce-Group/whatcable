@@ -87,8 +87,7 @@ public struct DisplayDiagnostic {
         /// The live on-screen mode from CoreGraphics, when the backend could
         /// match this display to its port. Drives the true resolution label
         /// (issue #249: 5K displays whose EDID can't describe their native
-        /// mode). nil when there's no live data (a non-Darwin backend, tests,
-        /// or no match).
+        /// mode). nil when there's no live data (tests, or no match).
         public let currentMode: DisplayCurrentMode?
         /// The display's native top mode as macOS reports it (CoreGraphics):
         /// highest resolution at its best refresh, EDID-free. The authoritative
