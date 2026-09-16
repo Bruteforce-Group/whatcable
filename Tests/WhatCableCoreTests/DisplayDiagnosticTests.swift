@@ -446,17 +446,17 @@ struct DisplayDiagnosticTests {
     /// fixture so the parse + verdict are tested against real hardware data
     /// without needing the corpus on disk.
     private static let fo32RealEDID = decodeHex(
-        "00ffffffffffff001c5415320000000009220104b5452778fb0ad5af4e3eb5240e5054" +
-        "bfef80714f81c08100814081809500a9c0b3004dd000a0f0703e8030203500bb8b2100" +
-        "001a000000fd0c30f0ffffea010a202020202020000000fc00414f52555320464f3332" +
-        "553250000000ff0000000000000000000000000000020d02033c704f6175765e5f603f" +
-        "4003040f10131f292309570783010000741a0000030330f000a067024f02f000000000" +
-        "0000e305c301e6060d01674f026fc200a0a0a0555030203500bb8b2100001a565e00a0a" +
-        "0a0295030203500bb8b2100001a0000000000000000000000000000000000000000000" +
-        "0000000000000000000005e7012790300030164e9ec00047f079f002f801f003704860" +
-        "002000400ca9c0104ff099f002f801f009f05b20002000400bb5a0204ff0e9f002f801" +
-        "f006f08b100020004005be70204ff0e9f002f801f006f08da0002000400f77e0304ff0" +
-        "edf002f801f006f08bc0002000400000000000000000000000000000000000000f090"
+        "00ffffffffffff001c5415320000000009220104b5452778fb0ad5af4e3eb5240e5054bf" +
+        "ef80714f81c08100814081809500a9c0b3004dd000a0f0703e8030203500bb8b2100001a" +
+        "000000fd0c30f0ffffea010a202020202020000000fc00414f52555320464f3332553250" +
+        "000000ff0000000000000000000000000000020d02033c704f6175765e5f603f4003040f" +
+        "10131f292309570783010000741a0000030330f000a067024f02f0000000000000e305c3" +
+        "01e6060d01674f026fc200a0a0a0555030203500bb8b2100001a565e00a0a0a029503020" +
+        "3500bb8b2100001a00000000000000000000000000000000000000000000000000000000" +
+        "0000005e7012790300030164e9ec00047f079f002f801f003704860002000400ca9c0104" +
+        "ff099f002f801f009f05b20002000400bb5a0204ff0e9f002f801f006f08b10002000400" +
+        "5be70204ff0e9f002f801f006f08da0002000400f77e0304ff0edf002f801f006f08bc00" +
+        "02000400000000000000000000000000000000000000f090"
     )
 
     private static func decodeHex(_ s: String) -> Data {
@@ -472,11 +472,16 @@ struct DisplayDiagnosticTests {
 
     @Test("Real FO32U2P EDID from the corpus parses to its 4K240 top mode")
     func corpusEDIDParses() throws {
+        // Fixture guard: the real corpus bytes, not a mistyped/truncated copy.
+        #expect(Self.fo32RealEDID.count == 384)
         let edid = try #require(EDIDInfo(Self.fo32RealEDID))
         #expect(edid.monitorName == "AORUS FO32U2P")
         #expect(edid.preferredWidth == 3840)
         #expect(edid.preferredHeight == 2160)
         #expect(edid.rangeLimitMaxRefreshHz == 240)
+        // The 240 Hz mode lives in the DisplayID extension block.
+        #expect(edid.topDetailedTiming?.pixelClockHz == 2_291_120_000)
+        #expect(edid.topDetailedTiming?.refreshHz == 240)
         // Product id (EDID bytes 10-11) is 0x3215 = 12821, the corpus value.
         #expect(Self.fo32RealEDID[10] == 0x15 && Self.fo32RealEDID[11] == 0x32)
     }
@@ -493,37 +498,25 @@ struct DisplayDiagnosticTests {
         #expect(diag.bottleneck == .compressionPlausible)
     }
 
-    @Test("Real corpus EDID with no CoreGraphics data admits its top mode is unreadable")
+    @Test("Real corpus EDID with no CoreGraphics data still reaches the DisplayPort ceiling verdict")
     func corpusEDIDWithoutCoreGraphicsReadsItsParsedTimings() throws {
-        // The FO32U2P's 240 Hz modes live in a DisplayID extension block this
-        // parser does not read; its highest 18-byte detailed timing is 4K60 at
-        // 533.25 MHz. Before issue #596 the 0xFD envelope (2.34 GHz) stood in
-        // for the top mode and happened to be right for this panel; it was
-        // wrong for the AOC U24P10R and 10x wrong for the ASUS PG27AQDP, so it
-        // is gone as a mode source.
-        //
-        // What it still is, is evidence: a panel accepting 4.39x the pixel
-        // clock of anything it declares as a timing has modes we cannot see. So
-        // the bandwidth figure stays the one real timing we parsed (the
-        // envelope never becomes a number we quote), but the verdict refuses to
-        // call that full quality. `corpusEDIDCompressionPlausible` above is the
-        // same EDID WITH the CoreGraphics top mode, which is the live app's
-        // usual path.
+        // The FO32U2P's 240 Hz modes live in a DisplayID extension block,
+        // now parsed, so its highest detailed timing is the real 3840x2160
+        // @240 at 2291.12 MHz rather than an understated 4K60. With every
+        // lane at HBR3 and no CoreGraphics live mode to confirm it, the
+        // DisplayPort-ceiling branch gives `.compressionPlausible`.
+        // `corpusEDIDCompressionPlausible` above is the same EDID WITH the
+        // CoreGraphics top mode, which is the live app's usual path.
         let dp = makeDP(lanes: 4, maxLanes: 4, rateDesc: "8.1 Gbps (HBR3)", edidData: Self.fo32RealEDID)
         let diag = try #require(DisplayDiagnostic(dp: dp))
-        #expect(diag.bottleneck == .unknownMode)
+        #expect(diag.bottleneck == .compressionPlausible)
         #expect(diag.isWarning == false)
-        // The ladder itself still resolves the one real timing we parsed (the
-        // envelope never becomes a number we quote)...
         let edid = try #require(EDIDInfo(Data(Self.fo32RealEDID)))
         let top = DisplayDiagnostic.topMode(maxMode: nil, edid: edid)
-        #expect(top.pixelClockHz == 533_250_000, "expected the 533.25 MHz 4K60 timing, got \(top.pixelClockHz)")
-        // ...but a verdict that says the capabilities aren't readable does not
-        // then quote a "top mode needs" figure it just declined to stand up.
-        #expect(diag.facts.neededGbps == nil,
-                "unknownMode must not carry a top-mode bandwidth, got \(String(describing: diag.facts.neededGbps))")
-        #expect(diag.facts.maxRefreshHz == nil,
-                "unknownMode must not carry a top-mode refresh, got \(String(describing: diag.facts.maxRefreshHz))")
+        #expect(top.pixelClockHz == 2_291_120_000, "expected the 2291.12 MHz 4K240 DisplayID timing, got \(top.pixelClockHz)")
+        let needed = try #require(diag.facts.neededGbps)
+        #expect(needed > 25.92)
+        #expect(diag.facts.maxRefreshHz == 240)
     }
 
     @Test("Real corpus EDID plus a matched 4K240 live mode confirms full quality")
@@ -1122,10 +1115,12 @@ struct DisplayDiagnosticTests {
 
     // MARK: - Issue #596: an envelope far above every parsed timing is unreadable, not fine
 
-    /// AORUS FO32U2P, from customer probe `m2pro_macos26.6`, as figures. Its
-    /// 240 Hz modes live in a DisplayID extension block the EDID parser does
-    /// not read, so the best timing it can see is the 4K60 at 533.25 MHz while
-    /// the 0xFD envelope declares 2.34 GHz: 4.39x.
+    /// AORUS FO32U2P, from customer probe `m2pro_macos26.6`, as figures.
+    /// Memberwise, not parsed from bytes: this fixture stands in for a top
+    /// mode the parser cannot read at all, so the best timing here is the
+    /// 4K60 at 533.25 MHz while the 0xFD envelope declares 2.34 GHz: 4.39x.
+    /// (The real EDID's 240 Hz mode is a DisplayID timing and is parsed now;
+    /// `corpusEDIDWithoutCoreGraphicsReadsItsParsedTimings` covers that.)
     private let fo32EnvelopeFarAbove = EDIDInfo(
         monitorName: "AORUS FO32U2P",
         versionMajor: 1, versionMinor: 4,
@@ -1237,9 +1232,10 @@ struct DisplayDiagnosticTests {
 
     /// MSI MAG274Q QD E2's shape, from customer probe `m1pro_macos26.5.2_z`:
     /// best parsed timing 2560x1440@120 at 497.75 MHz, envelope 720 MHz, a
-    /// ratio of 1.447. Its real 180 Hz top mode (746.64 MHz) is declared in a
-    /// DisplayID block this parser does not read. Rounded here to a clean
-    /// 1.45x so the test is about the boundary, not the panel.
+    /// ratio of 1.447. Memberwise, not parsed from bytes, so it still models
+    /// the top mode as unreadable regardless of whether DisplayID timings are
+    /// parsed. Rounded here to a clean 1.45x so the test is about the
+    /// boundary, not the panel.
     private let envelopeAt145 = EDIDInfo(
         monitorName: "MAG274Q QD E2",
         versionMajor: 1, versionMinor: 4,

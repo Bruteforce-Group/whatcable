@@ -188,19 +188,37 @@ extension DisplayDiagnostic {
     ///
     /// A panel that accepts a pixel clock more than 1.4x anything it declares
     /// as a detailed timing is declaring modes somewhere this parser does not
-    /// read: CTA VIC codes, or a DisplayID extension block. Blanking overhead
-    /// (10-20%) and a loosely specified range cannot account for a gap that
-    /// size. So the top mode is genuinely unknown and the honest answer is to
-    /// assert nothing rather than to guess low, which would reassure the user
-    /// about a link we have not actually checked.
+    /// read, mostly CTA-861 VIC codes. Blanking overhead (10-20%) and a
+    /// loosely specified range cannot account for a gap that size. So the top
+    /// mode is genuinely unknown and the honest answer is to assert nothing
+    /// rather than to guess low, which would reassure the user about a link
+    /// we have not actually checked.
     ///
-    /// Not an edge case: 98 of the 490 unique panel EDIDs in the customer-probe
-    /// corpus that carry both figures (20.0%) are over this line, the AORUS
-    /// FO32U2P (4.39x), DELL S2725QC (2.23x) and ASUS PG27AQDP (10.13x) among
-    /// them. The line was 1.5 at first; it came down because the MSI MAG274Q
-    /// QD E2 (1.447x) and Sceptre O34 (1.463x) both declare real 165-180 Hz
-    /// modes in DisplayID that this parser cannot see, and at 1.5 they read
-    /// "running at full quality" on a link short of what those modes need.
+    /// Re-measured 2026-09-16 with an independent parser over the 490 unique
+    /// panel EDIDs in the customer-probe corpus that carry both an 0xFD pixel
+    /// clock and a parsed timing. Before DisplayID Type I / VII timings were
+    /// parsed, 98 of 490 (20.0%) sat over this line. With them parsed, 30 of
+    /// 490 (6.1%) do: 68 rescued, the AORUS FO32U2P (4.39x, now 1.02x), DELL
+    /// S2725QC (2.23x, now 1.00x), MSI MAG274Q QD E2 (1.45x, now 0.96x) and
+    /// Sceptre O34 (1.46x, now 0.89x) among them. A DisplayID timing can still
+    /// sit above the envelope: the envelope is loosely specified, which is
+    /// why it was never a mode.
+    ///
+    /// What is still over the line declares its top mode somewhere this
+    /// parser does not read, mostly CTA-861 VIC codes: the LG TV SSCR2 family
+    /// (2.00x, 4K120 as a VIC) and the ASUS PG27AQDP (10.13x) among them.
+    ///
+    /// The line stays at 1.4, not 1.5, because the 1.4-1.5 band still isn't
+    /// empty. The two panels that pulled it down, the MAG274Q and Sceptre
+    /// O34, now parse, but the band still holds the Acer VG270 M3 (1.49x),
+    /// whose 0xFD says 180 Hz against a parsed 120 Hz mode, and whose 180 Hz
+    /// mode is in no timing this parser or DisplayID carries. The other four
+    /// in that band (Lenovo P27h-10 1.41x, Lenovo T2254pC 1.44x, DELL
+    /// S2725DS 1.46x, a Xiaomi "Mi Monitor" 1.46x) look like loose envelopes
+    /// on 60 and 100 Hz panels and would lose a `.fine` to `.unknownMode` on
+    /// the no-CoreGraphics path. A false all-clear costs more than a
+    /// non-answer, so the line holds.
+    ///
     /// Issue #596's own reporter sits at 1.13x and is deliberately below it:
     /// his panel keeps the all-clear.
     static let envelopeOverreachRatio = 1.4

@@ -291,4 +291,275 @@ struct EDIDInfoTests {
         )
         #expect(try #require(EDIDInfo(Data(vOnly))).preferredRefreshHz == 59)
     }
+
+    // MARK: - DisplayID extension
+    //
+    // DisplayID is a second, newer extension format (EDID extension tag
+    // 0x70) that some panels use to declare their real top mode instead of,
+    // or in addition to, a base-block or CTA-861 detailed timing. Layout:
+    // a 128-byte block starting 0x70, structure version (0x12 = 1.2,
+    // 0x13 = 1.3, 0x20 = 2.0), section length, product type, extension
+    // count, then data blocks (tag, revision, payload length, payload)
+    // starting at block byte 5. Type I timings (tag 0x03, DisplayID 1.x)
+    // give the pixel clock in 10 kHz units, same as a base/CTA detailed
+    // timing; Type VII timings (tag 0x22, DisplayID 2.0) use 1 kHz units
+    // instead, same 20-byte payload shape otherwise.
+
+    /// MSI MAG274Q QD E2, 384 bytes, captured live from a real Mac
+    /// (`research/customer-probes/m1pro_macos26.5.2_z`). Base block + CTA-861
+    /// extension (tag 0x02) + DisplayID 1.2 extension (tag 0x70, version
+    /// 0x12). The DisplayID block holds one Type I data block (tag 0x03,
+    /// four 20-byte timings); the fourth is the panel's real top mode,
+    /// above anything the base or CTA blocks carry.
+    static let mag274qHex =
+        "00ffffffffffff003669c2ac000000000f220104b53c2178f957a5af4f3db727085054bfcf0081809500b300d1c0714fa9c0b33cd1fc386100a0a0a055503020350055502100001a000000fd0c30b4ffff48010a202020202020000000fc004d414732373451205144204532000000ff004343324848333437303135343802bd020333f123090707830100004a0103049011131f203f12e2007fe305c000e6060701665f006d1a0000020130b4000473217321023a801871382d40582c450055502100001e6fc200a0a0a055503020350055502100001aa08380a070382d403020350055502100001a00000000000000000000000000000000000000000000b8701279030003015034e30004ff099f002f001f009f052c0002000400fb310004ff049f002f001f009f052800020004004f110104ff099f002f001f009f05760002000400a7230104ff099f002f001f009f0554000200040000000000000000000000000000000000000000000000000000000000000000000000000000000a90"
+
+    /// HG573T42, 384 bytes, captured live from a real Mac
+    /// (`research/customer-probes/m4pro_macos26.6.2_e`). Base block + CTA-861
+    /// extension (tag 0x02) + DisplayID 2.0 extension (tag 0x70, version
+    /// 0x20). Four separate Type VII data blocks (tag 0x22), one 20-byte
+    /// timing each, pixel clock in 1 kHz units rather than Type I's 10 kHz.
+    static let hg573t42Hex =
+        "00ffffffffffff004a8b42730000000015230104a5000078fe6435a5544f9e27125054210800d1c0a9c081c00101010101010101010150d000a0f0703e803020350061632100001a50d000a0f0703e803020350061632100001a000000fc0048473537335434320a20202020000000fd0028781e8780010a2020202020200299020334f149104c5d5e5f60613f7623097f078301000067030c002000b8ff67d85dc401ff8043e200eae3056000e606050169694f023a801871382d40582c450061632100001e565e00a0a0a029503020350061632100001e0000000000000000000000000000000000000000000000000000000000000000000000000000008970207900002200143f461084ff0e9f002f801f006f083d0002000400220014df8f0d04ff0e9f002f801f006f083d0002000400220014af340c04ff0e9f002f801f006f083d0002000400220014e72b0a04ff0e9f002f801f006f083d000200040000000000000000000000000000000000000000000000000000000000001490"
+
+    /// DELL S2725QC, 384 bytes, captured live from a real Mac
+    /// (`research/customer-probes/m4_macos26.5.2_j`). Base block byte 126
+    /// declares 1 extension, but the buffer carries two: a CTA-861 block
+    /// (tag 0x02) and, beyond what byte 126 admits, a DisplayID 1.2 block
+    /// (tag 0x70) whose Type I timings include the panel's real 4K120 mode.
+    static let s2725qcHex =
+        "00ffffffffffff0010ac73a2000000001b230103803c2278eae1b5ac524d9d230e5054a54b00714f8180a9c0a940d1c0e1000101010108e80030f2705a80b0588a0055502100001e000000ff0000000000000000000000000000000000fc0044454c4c20533237323551430a000000fd0030781bff77000a20202020202001a9020364f1e278025361010302040510121113141f20213f5d5e5f7623090707830100006d030c00100038442000600302016ad85dc40178886b023078e40f010004e305c301e6060501626227741a000003013078e6000000000078000000008000e200ea565e00a0a0a029503020350055502100001a0000000000000000006270123f030003013c856f00047f079f002f801f0037043f00020004006ec20004ff099f002f801f009f055400020004000fd00104ff0e2f02af8057006f08590007800900520000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000090"
+
+    @Test("MAG274Q: a Type I timing in a DisplayID 1.2 block becomes the top detailed timing")
+    func mag274qDisplayIDTypeITopTiming() throws {
+        let edid = try #require(EDIDInfo(Data(Self.hexBytes(Self.mag274qHex))))
+        #expect(edid.topDetailedTiming?.width == 2560)
+        #expect(edid.topDetailedTiming?.height == 1440)
+        #expect(edid.topDetailedTiming?.refreshHz == 180)
+        #expect(edid.topDetailedTiming?.pixelClockHz == 746_640_000)
+        // The 0xFD envelope is a separate signal from the real top mode and
+        // must not move when the top mode changes.
+        #expect(edid.rangeLimitMaxPixelClockHz == 720_000_000)
+        #expect(edid.monitorName == "MAG274Q QD E2")
+    }
+
+    @Test("MAG274Q: highestDetailedTiming reads the DisplayID block directly")
+    func mag274qHighestDetailedTimingReadsDisplayIDDirectly() {
+        let bytes = Self.hexBytes(Self.mag274qHex)
+        #expect(EDIDInfo.highestDetailedTiming(bytes)?.pixelClockHz == 746_640_000)
+    }
+
+    @Test("HG573T42: a Type VII timing in a DisplayID 2.0 block uses 1 kHz pixel-clock units")
+    func hg573t42DisplayIDTypeVIIUsesOneKHzUnits() throws {
+        let edid = try #require(EDIDInfo(Data(Self.hexBytes(Self.hg573t42Hex))))
+        #expect(edid.topDetailedTiming?.width == 3840)
+        #expect(edid.topDetailedTiming?.height == 2160)
+        #expect(edid.topDetailedTiming?.refreshHz == 120)
+        // If Type VII were misread as 10 kHz units (Type I's unit) this
+        // would come out as 10_665_600_000 Hz at 1200 Hz: asserting the
+        // refresh here too means that unit mistake cannot pass.
+        #expect(edid.topDetailedTiming?.pixelClockHz == 1_066_560_000)
+        #expect(edid.rangeLimitMaxPixelClockHz == 1_280_000_000)
+    }
+
+    @Test("A Type VII tag inside a DisplayID 1.x section is not decoded")
+    func typeVIITagInsideOnePointXSectionNotDecoded() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 1 // one extension block
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70 // DisplayID extension tag
+        block[1] = 0x12 // section version: DisplayID 1.2
+        block[2] = 0x17 // section length: 3-byte header + 20-byte payload
+        block[3] = 0x03 // product type
+        block[4] = 0x00 // extension count
+        block[5] = 0x22 // data block tag: Type VII, which only exists in 2.0
+        block[6] = 0x00 // revision
+        block[7] = 0x14 // payload length: 20 bytes
+        // Huge under either clock unit: a correct version gate skips this
+        // block regardless, since Type VII cannot appear in a 1.x section.
+        block[8] = 0xFF
+        block[9] = 0xFF
+        block[10] = 0xFF
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.topDetailedTiming?.pixelClockHz == 319_890_000)
+    }
+
+    @Test("A Type I tag inside a DisplayID 2.0 section is not decoded")
+    func typeITagInsideTwoPointOhSectionNotDecoded() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 1 // one extension block
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70
+        block[1] = 0x20 // section version: DisplayID 2.0
+        block[2] = 0x17
+        block[3] = 0x03
+        block[4] = 0x00
+        block[5] = 0x03 // data block tag: Type I, which only exists in 1.x
+        block[6] = 0x00
+        block[7] = 0x14
+        block[8] = 0xFF
+        block[9] = 0xFF
+        block[10] = 0xFF
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.topDetailedTiming?.pixelClockHz == 319_890_000)
+    }
+
+    @Test("A DisplayID data block that is not a Type I / VII timing is skipped")
+    func nonTimingDisplayIDBlockSkipped() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 1 // one extension block
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70 // DisplayID extension tag
+        block[1] = 0x12 // DisplayID 1.2
+        block[2] = 0x17 // section length: 3-byte data-block header + 20-byte payload
+        block[3] = 0x03 // product type
+        block[4] = 0x00 // extension count
+        block[5] = 0x04 // data block tag: Type II timing (short form), not Type I/VII
+        block[6] = 0x00 // revision
+        block[7] = 0x14 // payload length: 20 bytes
+        // Payload: if misread as a 20-byte timing, the first three bytes
+        // decode to a huge pixel clock under either unit (167.77 GHz at
+        // Type I's 10 kHz, 16.78 GHz at Type VII's 1 kHz), well above the
+        // base block's real top mode. A correct tag check must skip this
+        // block regardless of which unit it would have used.
+        block[8] = 0xFF
+        block[9] = 0xFF
+        block[10] = 0xFF
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.topDetailedTiming?.pixelClockHz == 319_890_000)
+    }
+
+    @Test("A DisplayID timing block whose length is not a multiple of 20 is skipped")
+    func misalignedDisplayIDTimingBlockSkipped() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 1 // one extension block
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70
+        block[1] = 0x12
+        block[2] = 0x21 // section length: 3-byte header + 30-byte payload
+        block[3] = 0x03
+        block[4] = 0x00
+        block[5] = 0x03 // data block tag: Type I timing
+        block[6] = 0x00 // revision
+        block[7] = 0x1E // payload length: 30 bytes, not a multiple of 20
+        // First 20 bytes decode to a huge pixel clock. Without the guard the
+        // inner loop reads this as one valid 20-byte timing (the trailing 10
+        // bytes going unread), well above the base block's real top mode.
+        // With the guard the whole block is rejected. The remaining 10 bytes
+        // of the 30-byte payload stay zero.
+        block[8] = 0xFF
+        block[9] = 0xFF
+        block[10] = 0xFF
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.topDetailedTiming?.pixelClockHz == 319_890_000)
+    }
+
+    @Test("A DisplayID section length past the block end never indexes out of range")
+    func sectionLengthPastBlockEndClamped() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 1 // one extension block
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70
+        block[1] = 0x12
+        block[2] = 0xFF // section length claims far more than the 128-byte block holds
+        block[3] = 0x03
+        block[4] = 0x00
+        block[5] = 0x03 // data block tag: Type I timing
+        block[6] = 0x00 // revision
+        block[7] = 0x14 // payload length: 20 bytes
+        let timing = Self.hexBytes("a7230104ff099f002f001f009f05540002000400") // MAG274Q's fourth timing
+        for (i, b) in timing.enumerated() { block[8 + i] = b }
+        // Non-zero past the timing, so the walk cannot stop early on the
+        // zero-tag/zero-length end marker: only the sectionEnd clamp keeps
+        // it from reading past the 128-byte block.
+        for i in 28...126 { block[i] = 0x01 }
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        // The walk must clamp to the 128-byte block and still return the
+        // timing it can read, rather than crashing.
+        #expect(edid.topDetailedTiming?.pixelClockHz == 746_640_000)
+    }
+
+    @Test("An extension count larger than the buffer is walked only as far as the bytes go")
+    func extensionCountLargerThanBufferWalksOnlyPresentBytes() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 3 // claims three extension blocks; only one is appended
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70
+        block[1] = 0x12
+        block[2] = 0x17 // sane section length: 3-byte header + 20-byte payload
+        block[3] = 0x03
+        block[4] = 0x00
+        block[5] = 0x03
+        block[6] = 0x00
+        block[7] = 0x14
+        let timing = Self.hexBytes("a7230104ff099f002f001f009f05540002000400") // MAG274Q's fourth timing
+        for (i, b) in timing.enumerated() { block[8 + i] = b }
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.topDetailedTiming?.pixelClockHz == 746_640_000)
+
+        // Truncated to the base block plus a partial extension: must not
+        // crash, and falls back to the base block's own real top mode.
+        let truncated = Array(bytes.prefix(200))
+        let truncatedEDID = try #require(EDIDInfo(Data(truncated)))
+        #expect(truncatedEDID.topDetailedTiming?.pixelClockHz == 319_890_000)
+    }
+
+    @Test("A DisplayID data block whose payload runs past the section end is rejected whole")
+    func dataBlockPayloadOverrunsSectionEndRejected() throws {
+        var bytes = Self.g34wBaseBlock
+        bytes[126] = 1 // one extension block
+        var block = [UInt8](repeating: 0, count: 128)
+        block[0] = 0x70
+        block[1] = 0x12
+        block[2] = 0x17 // section length: one 3-byte header + 20 bytes, not 40
+        block[3] = 0x03
+        block[4] = 0x00
+        block[5] = 0x03 // data block tag: Type I timing
+        block[6] = 0x00 // revision
+        block[7] = 0x28 // payload length: 40 bytes, twice what the section holds
+        let timing = Self.hexBytes("a7230104ff099f002f001f009f05540002000400") // MAG274Q's fourth timing
+        for (i, b) in timing.enumerated() { block[8 + i] = b }
+        // A second, far higher pixel clock right after it: if the overrunning
+        // block were read instead of rejected, this is what a correct decode
+        // of the (wrong) 40-byte payload would surface as the top mode.
+        var secondTiming = timing
+        secondTiming[0] = 0xFF
+        secondTiming[1] = 0xFF
+        secondTiming[2] = 0x0F
+        for (i, b) in secondTiming.enumerated() { block[28 + i] = b }
+        bytes.append(contentsOf: block)
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        // The overrunning block is rejected whole, so neither timing counts;
+        // the base block's own real top mode is what's left.
+        #expect(edid.topDetailedTiming?.pixelClockHz == 319_890_000)
+    }
+
+    @Test("S2725QC: a DisplayID block beyond the extension count in byte 126 is still walked")
+    func s2725qcDisplayIDBlockBeyondExtensionCountByteWalked() throws {
+        let bytes = Self.hexBytes(Self.s2725qcHex)
+        // Fixture guards: byte 126 under-declares what the buffer actually holds.
+        #expect(bytes[126] == 1)
+        #expect(bytes.count == 384)
+
+        let edid = try #require(EDIDInfo(Data(bytes)))
+        #expect(edid.monitorName == "DELL S2725QC")
+        #expect(edid.topDetailedTiming?.width == 3840)
+        #expect(edid.topDetailedTiming?.height == 2160)
+        #expect(edid.topDetailedTiming?.refreshHz == 120)
+        #expect(edid.topDetailedTiming?.pixelClockHz == 1_188_000_000)
+        // The 0xFD envelope is a separate signal from the real top mode and
+        // must not move when the top mode changes.
+        #expect(edid.rangeLimitMaxPixelClockHz == 1_190_000_000)
+    }
+
+    @Test("highestDetailedTiming on an empty buffer returns nil")
+    func highestDetailedTimingOnEmptyBufferReturnsNil() {
+        #expect(EDIDInfo.highestDetailedTiming([]) == nil)
+    }
 }
