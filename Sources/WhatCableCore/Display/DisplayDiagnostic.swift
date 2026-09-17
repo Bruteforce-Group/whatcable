@@ -24,9 +24,9 @@ import Foundation
 /// - `.adapterLimit` flags that a USB-C -> HDMI/DVI/VGA converter is in the
 ///   chain, so a shortfall can't be pinned on the cable.
 /// - `.unknownMode` when the link is live but there is nothing solid to
-///   compare it against: an unreadable EDID, or a readable one whose declared
-///   timings cannot account for the capability the panel claims. Report what
-///   the link is doing, blame nothing, promise nothing.
+///   compare it against: no readable EDID, no readable link rate, or a top
+///   mode that only macOS reports (`TopModeSource.reportedByMacOSOnly`).
+///   Report what the link is doing, blame nothing, promise nothing.
 ///
 /// Phase wording is deliberately plain (not `String(localized:)`) while the
 /// copy is under review; it moves to the localised bundle once approved,
@@ -42,15 +42,15 @@ public struct DisplayDiagnostic {
         /// A USB-C -> HDMI / DVI / VGA adapter sits in the chain, so a
         /// shortfall cannot be attributed to the cable.
         case adapterLimit
-        /// Live link, but nothing trustworthy to compare it against. Two
-        /// shapes reach it:
-        /// - No readable EDID (or no readable link rate) at all.
-        /// - A readable EDID whose declared timings cannot account for the
-        ///   capability the panel claims: its 0xFD envelope sits far above
-        ///   every detailed timing we could parse, and CoreGraphics gave us no
-        ///   usable top mode to settle it. See `topModeUnreadable`. Saying "running at
-        ///   full quality" there would be the mirror of issue #596's bug, so we
-        ///   assert nothing instead.
+        /// Live link, but nothing trustworthy to compare it against. Exactly
+        /// three shapes reach it:
+        /// - No readable EDID.
+        /// - No readable link rate.
+        /// - The top mode is reported by macOS only: CoreGraphics names a max
+        ///   mode that no declared EDID entry matches and no tiled composite
+        ///   explains, so its pixel clock, and with it the bandwidth it needs,
+        ///   is nowhere we can read (`TopModeSource.reportedByMacOSOnly`).
+        ///   Report the mode and the link, assert nothing.
         case unknownMode
         /// The link is at the DisplayPort ceiling (every lane, HBR3 or faster)
         /// yet short of the monitor's *uncompressed* top mode. DSC (~3:1
@@ -78,22 +78,35 @@ public struct DisplayDiagnostic {
         public let preferredWidth: Int?
         public let preferredHeight: Int?
         public let preferredRefreshHz: Int?
-        /// Refresh of the display's TOP MODE, as `topMode` resolved it:
-        /// CoreGraphics' native top mode where we have a usable one (see
-        /// `usableMaxMode`), else the highest detailed timing in the EDID. **Not** the 0xFD scan-range ceiling,
-        /// which is the range of signals the panel accepts rather than a mode
-        /// it has (issue #596). The name is kept because the Pro Display screen
-        /// and the tests read it.
+        /// Refresh of the display's TOP MODE, as `resolveTopMode` resolved
+        /// it: the highest-clock entry in the EDID's declared list, or the
+        /// mode macOS reports when no declared entry matches it. **Not** the
+        /// 0xFD scan-range ceiling, which is the range of signals the panel
+        /// accepts rather than a mode it has (issue #596). The name is kept
+        /// because the Pro Display screen and the tests read it. nil only
+        /// when there is no readable EDID.
         public let maxRefreshHz: Int?
         /// Resolution of that same top mode, so a label never pairs one
-        /// mode's refresh with another mode's resolution. `topDetailedTiming`
+        /// mode's refresh with another mode's resolution. `EDIDInfo.topMode`
         /// is max-by-pixel-clock, and a panel whose fastest timing is
         /// 1920x1080@240 while its preferred mode is 2560x1440 (Samsung
         /// Odyssey G60SD) has no 2560x1440@240 mode to label. nil exactly when
         /// `maxRefreshHz` is nil.
         public let topModeWidth: Int?
         public let topModeHeight: Int?
-        /// Bandwidth the monitor's top mode needs, usable Gbps (estimated).
+        /// Where that top mode came from, for the Pro receipts:
+        /// `EDIDMode.sourceDescription` for a declared entry (for example
+        /// "DisplayID Type I (block 3)" or "tiled composite of 2 tiles"), or
+        /// "macOS only" when CoreGraphics reports a mode the EDID does not
+        /// describe. nil only when there is no readable EDID.
+        public let topModeSource: String?
+        /// How many modes the EDID declares (`EDIDInfo.modes.count`), every
+        /// format counted. nil only when there is no readable EDID.
+        public let declaredModeCount: Int?
+        /// Bandwidth the monitor's top mode needs, usable Gbps: its declared
+        /// pixel clock times `assumedBitsPerPixel`. nil when there is no
+        /// readable EDID, and when the top mode is reported by macOS only
+        /// (there is no declared pixel clock to multiply).
         public let neededGbps: Double?
         /// Bandwidth the current link carries, usable Gbps (estimated).
         public let deliveredGbps: Double?
@@ -141,6 +154,16 @@ public struct DisplayDiagnostic {
     public let summary: String
     public let detail: String
     public let facts: Facts
+    /// The parsed EDID this diagnostic was built from, retained so the
+    /// output layers (JSON, bench report) can expose the full declared mode
+    /// list without re-parsing the raw bytes. nil exactly when `facts`'
+    /// EDID-derived fields are nil (no readable EDID).
+    public let edid: EDIDInfo?
+    /// The display's top mode as `resolveTopMode` resolved it. Same value
+    /// `facts.topModeWidth/Height/maxRefreshHz/topModeSource` were built
+    /// from, kept whole here (with its pixel clock) for the output layers.
+    /// nil exactly when `edid` is nil.
+    public let topMode: TopMode?
     /// Cable attribution, orthogonal to `bottleneck`. Only changes the wording
     /// in the `.belowMonitorMax` case; informational elsewhere.
     public let cableAssessment: CableAssessment
@@ -182,46 +205,6 @@ extension DisplayDiagnostic {
     static let assumedBitsPerPixel = 24
     /// Don't declare a shortfall on estimation noise alone.
     static let tolerance = 0.05
-    /// How far the 0xFD range-limits envelope may sit above the best detailed
-    /// timing we parsed before that timing stops counting as the panel's top
-    /// mode.
-    ///
-    /// A panel that accepts a pixel clock more than 1.4x anything it declares
-    /// as a detailed timing is declaring modes somewhere this parser does not
-    /// read, mostly CTA-861 VIC codes. Blanking overhead (10-20%) and a
-    /// loosely specified range cannot account for a gap that size. So the top
-    /// mode is genuinely unknown and the honest answer is to assert nothing
-    /// rather than to guess low, which would reassure the user about a link
-    /// we have not actually checked.
-    ///
-    /// Re-measured 2026-09-16 with an independent parser over the 490 unique
-    /// panel EDIDs in the customer-probe corpus that carry both an 0xFD pixel
-    /// clock and a parsed timing. Before DisplayID Type I / VII timings were
-    /// parsed, 98 of 490 (20.0%) sat over this line. With them parsed, 30 of
-    /// 490 (6.1%) do: 68 rescued, the AORUS FO32U2P (4.39x, now 1.02x), DELL
-    /// S2725QC (2.23x, now 1.00x), MSI MAG274Q QD E2 (1.45x, now 0.96x) and
-    /// Sceptre O34 (1.46x, now 0.89x) among them. A DisplayID timing can still
-    /// sit above the envelope: the envelope is loosely specified, which is
-    /// why it was never a mode.
-    ///
-    /// What is still over the line declares its top mode somewhere this
-    /// parser does not read, mostly CTA-861 VIC codes: the LG TV SSCR2 family
-    /// (2.00x, 4K120 as a VIC) and the ASUS PG27AQDP (10.13x) among them.
-    ///
-    /// The line stays at 1.4, not 1.5, because the 1.4-1.5 band still isn't
-    /// empty. The two panels that pulled it down, the MAG274Q and Sceptre
-    /// O34, now parse, but the band still holds the Acer VG270 M3 (1.49x),
-    /// whose 0xFD says 180 Hz against a parsed 120 Hz mode, and whose 180 Hz
-    /// mode is in no timing this parser or DisplayID carries. The other four
-    /// in that band (Lenovo P27h-10 1.41x, Lenovo T2254pC 1.44x, DELL
-    /// S2725DS 1.46x, a Xiaomi "Mi Monitor" 1.46x) look like loose envelopes
-    /// on 60 and 100 Hz panels and would lose a `.fine` to `.unknownMode` on
-    /// the no-CoreGraphics path. A false all-clear costs more than a
-    /// non-answer, so the line holds.
-    ///
-    /// Issue #596's own reporter sits at 1.13x and is deliberately below it:
-    /// his panel keeps the all-clear.
-    static let envelopeOverreachRatio = 1.4
     /// Margin for `.compressionActive`'s "live mode needs more than the link
     /// carries" check. Kept at 5%, same as the noise margin used elsewhere.
     ///
@@ -313,12 +296,17 @@ extension DisplayDiagnostic {
         self.cableAssessment = cableUnlikely ? .unlikelyTheCable : .inconclusive
 
         // No readable EDID: we can describe the link but have nothing to judge
-        // it against. Report, blame nothing.
-        guard let edid else {
+        // it against. Report, blame nothing. An `EDIDInfo` whose `topMode` is
+        // nil (an empty declared list, or every declared entry with a zero
+        // dimension) has no top mode to resolve and is treated the same way.
+        guard let edid, let top = Self.resolveTopMode(maxMode: dp.maxMode, edid: edid) else {
+            self.edid = edid
+            self.topMode = nil
             self.facts = Facts(
                 monitorName: nil,
                 preferredWidth: nil, preferredHeight: nil, preferredRefreshHz: nil,
                 maxRefreshHz: nil, topModeWidth: nil, topModeHeight: nil,
+                topModeSource: nil, declaredModeCount: nil,
                 neededGbps: nil, deliveredGbps: delivered,
                 lanes: lanes, maxLanes: maxLanes,
                 rateDescription: rate, sinkType: sinkType,
@@ -338,18 +326,25 @@ extension DisplayDiagnostic {
 
         let name = edid.monitorName ?? String(localized: "display", bundle: _coreLocalizedBundle)
         // The monitor's top MODE drives the comparison, never the 0xFD
-        // range-limits envelope. See `topMode` for why the two are not
-        // interchangeable (issue #596).
-        let top = Self.topMode(maxMode: dp.maxMode, edid: edid)
-        let needed = Double(top.pixelClockHz) * Double(Self.assumedBitsPerPixel) / 1_000_000_000
+        // range-limits envelope (issue #596). See `resolveTopMode`, resolved
+        // in the guard above.
+        self.edid = edid
+        self.topMode = top
+        // The declared pixel clock times bits per pixel, and nothing else. A
+        // top mode that only macOS reports has no declared clock to multiply,
+        // so `needed` is nil there and the verdict below says so by name.
+        let needed = top.pixelClockHz.map { Double($0) * Double(Self.assumedBitsPerPixel) / 1_000_000_000 }
+        let topRefresh = Int(top.refreshHz.rounded())
 
         let baseFacts = Facts(
             monitorName: edid.monitorName,
             preferredWidth: edid.preferredWidth,
             preferredHeight: edid.preferredHeight,
             preferredRefreshHz: edid.preferredRefreshHz,
-            maxRefreshHz: top.refreshHz,
+            maxRefreshHz: topRefresh,
             topModeWidth: top.width, topModeHeight: top.height,
+            topModeSource: top.sourceDescription,
+            declaredModeCount: edid.modes.count,
             neededGbps: needed,
             deliveredGbps: delivered,
             lanes: lanes, maxLanes: maxLanes,
@@ -368,44 +363,22 @@ extension DisplayDiagnostic {
             return
         }
 
+        // macOS reports a top mode the EDID does not describe. The mode is
+        // real (CoreGraphics lists it) but its pixel clock is not in the EDID,
+        // so the bandwidth it needs cannot be computed from anything we read.
+        // Name the mode, report the link, assert nothing.
+        guard let needed else {
+            self.facts = baseFacts
+            self.bottleneck = .unknownMode
+            self.summary = String(localized: "Display connected", bundle: _coreLocalizedBundle)
+            self.detail = String(localized: "macOS reports a \(top.width) × \(top.height) mode at \(topRefresh)Hz that your \(name)'s EDID doesn't describe, so the bandwidth it needs can't be computed.", bundle: _coreLocalizedBundle)
+                + " "
+                + String(localized: "The link is carrying about \(Self.gbps(delivered)) (\(lanes) of \(maxLanes) lanes).", bundle: _coreLocalizedBundle)
+            return
+        }
+
         // Does the current link already carry the monitor's top mode?
         if needed <= delivered * (1 + Self.tolerance) {
-            // ...but only say so when we can stand up what the top mode IS.
-            // With no CoreGraphics mode and an envelope far above every timing
-            // we parsed, the panel has modes we cannot see, so the comparison
-            // just cleared was against an understated top. Reassuring the user
-            // there is the mirror image of issue #596's bug. Report the link,
-            // claim nothing. (The copy is deliberately the same as the
-            // no-readable-EDID case: it says the display's capabilities are not
-            // readable, which is exactly what is true here, and it is already
-            // in every localisation catalogue.)
-            if Self.topModeUnreadable(maxMode: dp.maxMode, edid: edid) {
-                // The top-mode figures (`neededGbps`, `maxRefreshHz`) are nil
-                // here, as on the no-readable-EDID path: the Pro receipts and
-                // heading would otherwise print "Top mode needs N Gbps" and
-                // "up to NHz" directly under a verdict saying the capabilities
-                // aren't readable. The link facts stay; they are what the
-                // verdict reports.
-                self.facts = Facts(
-                    monitorName: edid.monitorName,
-                    preferredWidth: edid.preferredWidth,
-                    preferredHeight: edid.preferredHeight,
-                    preferredRefreshHz: edid.preferredRefreshHz,
-                    maxRefreshHz: nil, topModeWidth: nil, topModeHeight: nil,
-                    neededGbps: nil,
-                    deliveredGbps: delivered,
-                    lanes: lanes, maxLanes: maxLanes,
-                    rateDescription: rate, sinkType: sinkType,
-                    branchDevice: branchDevice,
-                    currentMode: dp.currentMode, maxMode: dp.maxMode
-                )
-                self.bottleneck = .unknownMode
-                self.summary = String(localized: "Display connected", bundle: _coreLocalizedBundle)
-                self.detail = String(localized: "A display is connected but its capabilities aren't readable, so there's nothing to compare the link against.", bundle: _coreLocalizedBundle)
-                    + " "
-                    + String(localized: "The link is carrying about \(Self.gbps(delivered)) (\(lanes) of \(maxLanes) lanes).", bundle: _coreLocalizedBundle)
-                return
-            }
             self.facts = baseFacts
             self.bottleneck = .fine
             self.summary = String(localized: "Display running at full quality", bundle: _coreLocalizedBundle)
@@ -424,9 +397,9 @@ extension DisplayDiagnostic {
         } else {
             laneLabel = String(localized: "\(lanes) of \(maxLanes) lanes", bundle: _coreLocalizedBundle)
         }
-        let canDo = top.refreshHz
-            .map { String(localized: "up to \($0)Hz", bundle: _coreLocalizedBundle) }
-            ?? String(localized: "a higher mode than the link is carrying", bundle: _coreLocalizedBundle)
+        let canDo = topRefresh > 0
+            ? String(localized: "up to \(topRefresh)Hz", bundle: _coreLocalizedBundle)
+            : String(localized: "a higher mode than the link is carrying", bundle: _coreLocalizedBundle)
         let dscCaveat = " " + String(localized: "High-resolution displays often use compression (DSC) to fit their top mode through a link like this, so selecting the higher mode in Display settings may reach it normally.", bundle: _coreLocalizedBundle)
 
         if let sinkType {
@@ -460,7 +433,7 @@ extension DisplayDiagnostic {
             // Strict and fail-closed: only when we have a matched live mode and
             // it meets the panel's top mode by active-pixel throughput.
             // Anything short, or no live mode at all, keeps today's verdict.
-            if let current = dp.currentMode, Self.meetsTopMode(current, maxMode: dp.maxMode, edid: edid) {
+            if let current = dp.currentMode, Self.meetsTopMode(current, top: top) {
                 self.facts = baseFacts
                 self.bottleneck = .fine
                 self.summary = String(localized: "Display running at full quality", bundle: _coreLocalizedBundle)
@@ -582,202 +555,149 @@ extension DisplayDiagnostic {
         return neededGbps > deliveredGbps * (1 + Self.compressionActiveTolerance)
     }
 
-    /// The display's top mode: its resolution, pixel clock and refresh. The
-    /// resolution travels with the refresh so a label never pairs one mode's
-    /// refresh with another mode's resolution (see `Facts.topModeWidth`).
-    ///
-    /// Three sources, three different jobs, and using the wrong one is issue
-    /// #596:
-    /// - `maxMode` (CoreGraphics) is authoritative about WHICH mode is top. It
-    ///   is EDID-free, so it is right even for 5K/6K panels whose EDID cannot
-    ///   describe their native mode (issue #249).
-    /// - A detailed timing supplies that mode's PIXEL CLOCK, which is what
-    ///   bandwidth needs because it includes blanking. CoreGraphics reports
-    ///   active pixels only and runs 10-20% lower at the very same mode (see
-    ///   `meetsTopMode`).
-    /// - The 0xFD range-limits envelope supplies neither. It is the range of
-    ///   signals the panel accepts, not a mode it has. An AOC U24P10R, a 4K60
-    ///   panel, declares a 75 Hz / 600 MHz envelope and has no 75 Hz mode; the
-    ///   worst in the corpus (ASUS PG27AQDP) declares 2.52 GHz against a real
-    ///   top timing of 248.87 MHz. So it appears at no rung below, and if you
-    ///   find yourself reaching for it the ladder is wrong.
-    ///
-    /// `refreshHz` is nil when nothing readable supplies one; callers fall back
-    /// to generic wording rather than printing a number they cannot stand up.
-    static func topMode(maxMode: DisplayCurrentMode?, edid: EDIDInfo)
-        -> (width: Int, height: Int, pixelClockHz: Int, refreshHz: Int?) {
-        let timing = edid.topDetailedTiming
+    // MARK: - Top mode
 
-        // Rungs 1 and 2 run only on a max mode that can raise the top above
-        // what the EDID declares. One that sits below the panel's own timing
-        // is describing the link, not the panel (see `usableMaxMode`), and
-        // falls straight through to rung 3.
-        if let maxMode = Self.usableMaxMode(maxMode, against: timing) {
-            let maxRefresh = Int(maxMode.refreshHz.rounded())
+    /// Where the display's top mode came from.
+    public enum TopModeSource: Hashable, Sendable {
+        /// The mode is in the EDID's declared list; carries which entry.
+        case declared(EDIDMode.Source)
+        /// macOS reports a mode (its max mode) that no declared entry matches and no tiled composite explains.
+        case reportedByMacOSOnly
+    }
 
-            // Rung 1. CoreGraphics names the top mode and the EDID has a
-            // detailed timing for that same mode, so we get the authoritative
-            // mode AND its real pixel clock. Everything below is a degradation
-            // of this.
-            //
-            // "Same mode" means resolution and refresh both, not resolution
-            // alone: a 4K120 panel that declares only a 4K60 detailed timing
-            // matches on pixel count while its 533 MHz clock describes half the
-            // mode CoreGraphics named. Matching on pixels alone there would pair
-            // a 60 Hz bandwidth figure with a "120Hz" label, which is the same
-            // class of mismatch as #596 itself. That case belongs on rung 2.
-            if let timing,
-               Self.withinTolerance(Double(timing.width), Double(maxMode.width)),
-               Self.withinTolerance(Double(timing.height), Double(maxMode.height)),
-               Self.withinTolerance(Double(timing.refreshHz), maxMode.refreshHz) {
-                return (maxMode.width, maxMode.height, timing.pixelClockHz, maxRefresh)
-            }
+    /// The display's top mode as the diagnostic resolved it: the mode the
+    /// link is judged against. Built by `resolveTopMode` and nowhere else.
+    public struct TopMode: Hashable, Sendable {
+        public let width: Int
+        public let height: Int
+        public let refreshHz: Double
+        /// nil exactly when `source == .reportedByMacOSOnly`: the mode exists (macOS lists it) but its
+        /// pixel clock is not in the EDID, so nothing here can name the bandwidth it needs.
+        public let pixelClockHz: Int?
+        /// Carried from the declared entry. For an interlaced entry
+        /// `refreshHz` is the field rate and each field carries half the
+        /// lines, so `activePixelRate` halves, the same as
+        /// `EDIDMode.activePixelRate`. Always false for `.reportedByMacOSOnly`:
+        /// CoreGraphics modes carry no interlace flag.
+        public let interlaced: Bool
+        public let source: TopModeSource
+        /// Active pixels per second, the domain CoreGraphics reports in:
+        /// `width * height * refreshHz`, halved when interlaced.
+        public var activePixelRate: Double { Double(width) * Double(height) * refreshHz / (interlaced ? 2 : 1) }
 
-            // Rung 2. CoreGraphics names a mode no detailed timing describes:
-            // the 5K/6K case, and any panel whose top mode is declared in a
-            // form we don't parse. Below rung 1 because the pixel clock is
-            // derived, not read. CoreGraphics counts active pixels only, so
-            // scale its rate up by the blanking overhead of the panel's OWN top
-            // timing. Self-calibrating from the same hardware, which beats a
-            // hardcoded constant.
-            let activeRate = Double(maxMode.width) * Double(maxMode.height) * maxMode.refreshHz
-            if activeRate > 0 {
-                let ratio: Double
-                if let timing,
-                   timing.width > 0, timing.height > 0, timing.refreshHz > 0,
-                   timing.pixelClockHz > 0 {
-                    let timingActive = Double(timing.width) * Double(timing.height) * Double(timing.refreshHz)
-                    ratio = Double(timing.pixelClockHz) / timingActive
-                } else {
-                    // No timing to calibrate from. 1.08 is a CVT
-                    // reduced-blanking approximation and an estimate, not a
-                    // measurement: it is the weakest number in this function.
-                    ratio = 1.08
-                }
-                return (maxMode.width, maxMode.height, Int((activeRate * ratio).rounded()), maxRefresh)
+        public init(width: Int, height: Int, refreshHz: Double, pixelClockHz: Int?, interlaced: Bool, source: TopModeSource) {
+            self.width = width
+            self.height = height
+            self.refreshHz = refreshHz
+            self.pixelClockHz = pixelClockHz
+            self.interlaced = interlaced
+            self.source = source
+        }
+
+        /// A declared entry carried whole: its own width, height, refresh,
+        /// pixel clock and interlace flag, so `activePixelRate` equals
+        /// `mode.activePixelRate` by construction.
+        init(declared mode: EDIDMode) {
+            self.init(
+                width: mode.width, height: mode.height, refreshHz: mode.refreshHz,
+                pixelClockHz: mode.pixelClockHz, interlaced: mode.interlaced, source: .declared(mode.source)
+            )
+        }
+
+        /// `Facts.topModeSource`: the declared entry's own label, or
+        /// "macOS only".
+        public var sourceDescription: String {
+            switch source {
+            case .declared(let entry): return entry.description
+            case .reportedByMacOSOnly: return "macOS only"
             }
         }
-
-        // Rung 3. No usable CoreGraphics mode. The highest detailed timing is
-        // then the only mode evidence the display has given us. Below rung 2
-        // because the EDID can understate a panel whose top mode is declared
-        // somewhere we don't parse; it can never overstate it the way the
-        // envelope does.
-        if let timing, timing.pixelClockHz > 0 {
-            return (timing.width, timing.height, timing.pixelClockHz, timing.refreshHz > 0 ? timing.refreshHz : nil)
-        }
-
-        // Rung 4. No detailed timing at all (an EDID carrying only standard
-        // timings). The preferred mode is the conservative floor: it is a mode
-        // the panel really has, just not necessarily its best one.
-        return (
-            edid.preferredWidth,
-            edid.preferredHeight,
-            edid.preferredPixelClockHz,
-            edid.preferredRefreshHz > 0 ? edid.preferredRefreshHz : nil
-        )
     }
 
-    /// Whether the top mode `topMode` resolved is too weak to reassure anyone
-    /// with: the panel's 0xFD envelope sits more than `envelopeOverreachRatio`
-    /// above the best detailed timing we could parse, and CoreGraphics gave us
-    /// no usable top mode to settle it.
+    /// CoreGraphics rounds a mode's refresh to a whole number of hertz; the
+    /// EDID does not (59.94, 143.98). A declared entry within this much of the
+    /// reported refresh, at the same resolution, is the same mode. A matching
+    /// window, not a derivation: nothing is computed from it.
+    static let refreshMatchHz = 0.5
+
+    /// The display's top mode: the mode the link is judged against. Nil when
+    /// `edid.topMode` is nil: an empty declared list, or a parsed EDID whose
+    /// every entry has a zero dimension. Then there is nothing to judge
+    /// against, and the diagnostic's init treats it like no EDID.
     ///
-    /// The envelope is still never used as a mode (that is issue #596). It is
-    /// used here only as evidence that a mode exists which we cannot see, so
-    /// the ladder's rung-3 answer understates the panel and a `.fine` verdict
-    /// built on it would be a false all-clear. See `envelopeOverreachRatio`.
+    /// Four steps, in order, and no other branch:
+    /// 1. `panelTop` is `edid.topMode`, the highest-clock entry in the
+    ///    declared list. `preferredMode` plays no part: it is the EDID's
+    ///    stated default, not its top, and may be absent.
+    /// 2. No max mode from CoreGraphics, or one with no readable refresh:
+    ///    `panelTop`.
+    /// 3. The max mode matches a declared entry (`declaredMode(matching:in:)`):
+    ///    that entry when its pixel clock is at least `panelTop`'s, so a max
+    ///    mode that IS a declared entry is labelled from that entry; otherwise
+    ///    `panelTop`. A max mode may only raise the top, never lower it:
+    ///    CoreGraphics builds its mode list from what the trained link can
+    ///    carry (`planning/display-current-mode-coregraphics.md`), so a lower
+    ///    max mode describes the link, not the panel.
+    /// 4. No declared entry matches: when the max mode's active-pixel rate
+    ///    sits above `panelTop`'s by more than `tolerance`, macOS is reporting
+    ///    a mode the EDID does not describe, returned as
+    ///    `.reportedByMacOSOnly` with no pixel clock; otherwise `panelTop`.
     ///
-    /// Three conditions, all required:
-    /// - No usable CoreGraphics top mode, by the same `usableMaxMode` test the
-    ///   ladder applies. Where macOS names a top mode at or above the panel's
-    ///   own timing we trust it completely and this check never fires,
-    ///   whatever the envelope says. A max mode BELOW the timing is
-    ///   link-limited, not authoritative, so it does not switch the check off.
-    ///   (`DisplayModeReader` drops the max mode when two identical panels
-    ///   can't be told apart, or when a refresh reads zero, so the no-max-mode
-    ///   path is a live-app path and not only corpus replay.)
-    /// - An envelope pixel clock.
-    /// - A parsed detailed timing to compare it against. No envelope or no
-    ///   timing means no comparison to make, so behaviour is unchanged.
-    static func topModeUnreadable(maxMode: DisplayCurrentMode?, edid: EDIDInfo) -> Bool {
-        guard Self.usableMaxMode(maxMode, against: edid.topDetailedTiming) == nil else { return false }
-        guard let envelope = edid.rangeLimitMaxPixelClockHz, envelope > 0,
-              let timing = edid.topDetailedTiming, timing.pixelClockHz > 0
-        else { return false }
-        return Double(envelope) > Double(timing.pixelClockHz) * Self.envelopeOverreachRatio
+    /// Nothing here derives a pixel clock: every clock returned is an
+    /// `EDIDMode.pixelClockHz` read from the EDID, or nil. The 0xFD
+    /// range-limits envelope is never consulted, on a continuous-frequency
+    /// panel or any other: it is the range of signals the panel accepts, not
+    /// a mode it has (issue #596).
+    static func resolveTopMode(maxMode: DisplayCurrentMode?, edid: EDIDInfo) -> TopMode? {
+        // 1. The declared top. Nil when no entry qualifies (see above).
+        guard let panelTop = edid.topMode else { return nil }
+        // 2. Nothing from CoreGraphics to weigh against the list.
+        guard let maxMode, maxMode.refreshHz > 0 else { return TopMode(declared: panelTop) }
+        // 3. The max mode is a declared entry: label it from that entry, but
+        //    never let it lower the top.
+        if let matched = Self.declaredMode(matching: maxMode, in: edid) {
+            if matched.pixelClockHz >= panelTop.pixelClockHz { return TopMode(declared: matched) }
+            return TopMode(declared: panelTop)
+        }
+        // 4. Not declared anywhere: above the list it is macOS's fact alone,
+        //    with no clock to read; at or below it the declared top stands.
+        //    `panelTop.activePixelRate` halves for an interlaced entry, the
+        //    same figure `TopMode(declared:)` would carry.
+        if maxMode.pixelThroughput > panelTop.activePixelRate * (1 + Self.tolerance) {
+            return TopMode(
+                width: maxMode.width, height: maxMode.height, refreshHz: maxMode.refreshHz,
+                pixelClockHz: nil, interlaced: false, source: .reportedByMacOSOnly
+            )
+        }
+        return TopMode(declared: panelTop)
     }
 
-    /// The CoreGraphics max mode, if it is fit to name the panel's top mode;
-    /// nil when it is not.
-    ///
-    /// The principle: **a max mode may only ever RAISE the top mode above what
-    /// the EDID declares, never lower it.** A detailed timing is a mode the
-    /// panel has. CoreGraphics builds its mode list (the one System Settings
-    /// shows) from what the trained link can carry, so a 4K60 panel behind a
-    /// 2-lane hub can report a 4K30 max mode. That number describes the link,
-    /// not the panel, and taking it as the top mode would clear the link
-    /// against the very cap the user came to ask about: a monitor capped by a
-    /// weak cable reading as "full quality", which is the one failure
-    /// `EDIDInfo`'s type comment forbids.
-    ///
-    /// So the max mode is usable when its refresh is readable and its
-    /// active-pixel rate is at least the top timing's (within `tolerance`),
-    /// or when there is no timing to compare against. Compared in the
-    /// active-pixel domain on both sides, never against the timing's pixel
-    /// clock, which carries blanking.
-    private static func usableMaxMode(
-        _ maxMode: DisplayCurrentMode?, against timing: EDIDInfo.DetailedTiming?
-    ) -> DisplayCurrentMode? {
-        guard let maxMode, maxMode.refreshHz > 0 else { return nil }
-        guard let timing, timing.width > 0, timing.height > 0, timing.refreshHz > 0 else {
-            return maxMode
+    /// The declared entry a CoreGraphics mode is: same width and height,
+    /// refresh within `refreshMatchHz`, and the highest pixel clock among the
+    /// entries that match. nil when no entry matches. Interlace is not part
+    /// of the match: a CoreGraphics `DisplayCurrentMode` carries no interlace
+    /// flag, so there is nothing on that side to compare it with.
+    static func declaredMode(matching mode: DisplayCurrentMode, in edid: EDIDInfo) -> EDIDMode? {
+        var best: EDIDMode? = nil
+        for entry in edid.modes {
+            guard entry.width == mode.width, entry.height == mode.height,
+                  abs(entry.refreshHz - mode.refreshHz) <= Self.refreshMatchHz
+            else { continue }
+            if let current = best, current.pixelClockHz >= entry.pixelClockHz { continue }
+            best = entry
         }
-        let timingActive = Double(timing.width) * Double(timing.height) * Double(timing.refreshHz)
-        guard maxMode.pixelThroughput >= timingActive * (1 - Self.tolerance) else { return nil }
-        return maxMode
+        return best
     }
 
-    /// Whether two figures agree within `tolerance`, used to decide whether a
-    /// detailed timing and a CoreGraphics mode are the same mode.
-    private static func withinTolerance(_ a: Double, _ b: Double) -> Bool {
-        guard a > 0, b > 0 else { return false }
-        return abs(a - b) <= max(a, b) * Self.tolerance
-    }
-
-    /// Whether the live mode meets the monitor's top mode. Compared in one
-    /// domain on purpose: active-pixel throughput on both sides. Never the EDID
-    /// pixel clock, which includes blanking and would run ~10-20% higher than
-    /// CoreGraphics' active-pixel figure at the very same mode, making this
-    /// comparison fail when it shouldn't. The tolerance absorbs blanking and
-    /// refresh rounding.
-    ///
-    /// The top-mode reference is the HIGHER of the CoreGraphics max mode (the
-    /// EDID-free top mode, which handles 5K for free where the EDID
-    /// under-reports the native mode) and the EDID's highest detailed timing,
-    /// falling back to the preferred mode when neither is there. The higher of
-    /// the two, not CoreGraphics first: a max mode may only raise the top
-    /// above what the EDID declares, never lower it, because a max mode below
-    /// a timing the panel really has is describing a link-limited mode list
-    /// (see `usableMaxMode`). Never the 0xFD range-limits envelope: that is a
-    /// range of acceptable signals, not a mode the panel has, and treating it
-    /// as one is issue #596.
-    static func meetsTopMode(_ current: DisplayCurrentMode, maxMode: DisplayCurrentMode?, edid: EDIDInfo) -> Bool {
-        var candidates: [Double] = []
-        if let maxMode {
-            candidates.append(maxMode.pixelThroughput)
-        }
-        if let timing = edid.topDetailedTiming, timing.refreshHz > 0 {
-            // The panel's own top mode, in active pixels. Deliberately the
-            // timing's width/height/refresh and never its pixel clock: this
-            // comparison lives in the active-pixel domain on both sides, and a
-            // pixel clock carries blanking (see the doc comment above).
-            candidates.append(Double(timing.width) * Double(timing.height) * Double(timing.refreshHz))
-        }
-        let topThroughput = candidates.max()
-            ?? Double(edid.preferredWidth) * Double(edid.preferredHeight) * Double(edid.preferredRefreshHz)
-        guard topThroughput > 0 else { return false }
-        return current.pixelThroughput >= topThroughput * (1 - Self.tolerance)
+    /// Whether the live mode is the top mode. An identity test between two
+    /// modes in one domain, active-pixel throughput on both sides, never the
+    /// EDID pixel clock, which carries blanking and runs 10-20% above
+    /// CoreGraphics' active-pixel figure at the very same mode. The tolerance
+    /// absorbs refresh rounding; this is not a bandwidth estimate. A top mode
+    /// with no readable refresh meets nothing.
+    static func meetsTopMode(_ current: DisplayCurrentMode, top: TopMode) -> Bool {
+        guard top.activePixelRate > 0 else { return false }
+        return current.pixelThroughput >= top.activePixelRate * (1 - Self.tolerance)
     }
 
     // MARK: - Link-rate labelling (shared by every Pro UI surface)

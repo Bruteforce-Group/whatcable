@@ -404,14 +404,17 @@ struct DisplayDiagnosticProbeSweepTests {
 
     // MARK: m3max_macos26.5_f block 1 -- Apple Studio Display (second machine, tunneled HBR2 4/4)
     //
-    // The EDID's DisplayID Type I timing declares the panel's real 5120x2880@60
-    // mode (936 MHz, about 22.46 Gbps at 24 bpp), now parsed; the EDID carries no
-    // 0xFD envelope, so the overreach guard cannot fire; the link is a tunnelled
-    // HBR2 4/4 (17.28 Gbps delivered); probe 33 carries no CoreGraphics data, so
-    // the DSC-active check cannot run; so on replay the verdict is the
-    // link-limited one, with the cable exonerated by the tunnel. The old .fine
-    // was right only because the parser under-read the panel as 4K60. The live
-    // app usually has CoreGraphics data, which reaches the DSC path instead.
+    // The EDID declares the panel's real 5120x2880@60 twice: as a DisplayID
+    // Type I timing in block 3 (936 MHz) and, through the tiled topology in
+    // block 2 (2 x 1 tiles of 2560x2880) applied to the CTA DTD 4 tile mode
+    // in block 1 (482.4 MHz), as a composite at 2 x 482.4 = 964.8 MHz. The
+    // composite has the higher clock, so it is the declared top (about 23.16
+    // Gbps at 24 bpp). The link is a tunnelled HBR2 4/4 (17.28 Gbps
+    // delivered); probe 33 carries no CoreGraphics data, so the DSC-active
+    // check cannot run; so on replay the verdict is the link-limited one, with
+    // the cable exonerated by the tunnel. The old .fine was right only because
+    // the parser under-read the panel as 4K60. The live app usually has
+    // CoreGraphics data, which reaches the DSC path instead.
 
     @Test("m3max_macos26.5_f: Studio Display's DisplayID top mode exceeds the tunnelled link, cable still exonerated")
     func m3maxStudioDisplay() throws {
@@ -426,8 +429,12 @@ struct DisplayDiagnosticProbeSweepTests {
         #expect(diag.cableAssessment == .unlikelyTheCable, "Tunneled must exonerate cable")
         #expect(diag.facts.monitorName == "StudioDisplay")
         #expect(diag.facts.maxRefreshHz == 60)
+        #expect(diag.facts.topModeWidth == 5120)
+        #expect(diag.facts.topModeSource == "tiled composite of 2 tiles",
+            "got \(String(describing: diag.facts.topModeSource))")
         let needed = try #require(diag.facts.neededGbps)
         #expect(needed > 17.28)
+        #expect(abs(needed - 964_800_000.0 * 24 / 1e9) < 1e-9, "expected the composite's 964.8 MHz x 24bpp, got \(needed)")
     }
 
     // MARK: m3max_macos26.5_f block 2 -- Dell S2725QC, HBR3 4/4 lanes, direct DP
@@ -475,9 +482,8 @@ struct DisplayDiagnosticProbeSweepTests {
     //   Monitors: two DELL U2790B (4K 27" 60Hz), same model on the same dock
     //   Block 1: 4 of 4 lanes, 5.4 Gbps (HBR2), tunneled=true --> carries 4K60
     //   Block 2 (the one under test): 2 of 4 lanes, same rate, tunneled=true
-    //   EDID (both): top detailed timing 3840x2160@60 at 533.25 MHz, 0xFD
-    //     envelope 600 MHz / 80 Hz -- a ratio of 1.13, so the panel's parsed
-    //     timing stands as its top mode (see `envelopeOverreachRatio`)
+    //   EDID (both): top declared timing 3840x2160@60 at 533.25 MHz; the 0xFD
+    //     envelope (600 MHz / 80 Hz) is a range, not a mode, and is never read
     //   Bandwidth: needed=12.80 Gbps, delivered=2x5.4x0.8=8.64 Gbps
     //   NOT at ceiling (2 of 4 lanes, and HBR2 per-lane < 8.0)
     //
@@ -488,9 +494,8 @@ struct DisplayDiagnosticProbeSweepTests {
     // It is also the corpus's copy of issue #596's reporter: two identical
     // panels behind a hub, which is exactly the shape that leaves the live app
     // with no CoreGraphics top mode (`DisplayModeReader.match` fails closed
-    // when two displays share an EDID identity). The envelope overshoots by
-    // 1.13x here, under the threshold, so the shortfall verdict stands rather
-    // than degrading to .unknownMode.
+    // when two displays share an EDID identity). The declared list alone
+    // drives the verdict, so the shortfall stands.
     //
     // (It replaces an m2pro_macos26.5_c test that asked for a second active
     // block in a folder with only one, so `firstActiveDP` returned nil and the
@@ -839,25 +844,28 @@ struct DisplayDiagnosticProbeSweepTests {
         }
     }
 
-    // MARK: - Sweep: needed bandwidth never exceeds the best real timing (issue #596)
+    // MARK: - Sweep: needed bandwidth is the declared top mode's clock, nothing else
 
     /// Walk every probe-33 folder in the corpus -- not the named fixture
-    /// machines above, the whole thing -- and assert the property the #596
-    /// fix guarantees: for every active DisplayPort block whose EDID parses
-    /// and carries a `topDetailedTiming`, the diagnostic's needed bandwidth
-    /// (computed with no CoreGraphics data, which is all probe 33 ever
-    /// supplies) never exceeds what that panel's best REAL timing needs.
+    /// machines above, the whole thing -- and assert the property the
+    /// diagnostic now guarantees: for every active DisplayPort block whose
+    /// EDID parses, the needed bandwidth is exactly the declared top mode's
+    /// pixel clock times bits per pixel, and the top mode is labelled from
+    /// that entry. Probe 33 carries no CoreGraphics data, so
+    /// `resolveTopMode`'s no-max-mode rule applies on every block. A block
+    /// with no readable link rate is `.unknownMode` but still carries the
+    /// figure, so it is checked too.
     ///
-    /// Before the fix, `needed` came from the 0xFD range-limits envelope,
-    /// which is the set of signals a panel accepts rather than a mode it
-    /// has, and routinely overstates the real top mode (up to 10x in this
-    /// corpus). This sweep would have failed on roughly 481 of the corpus's
-    /// 490 unique EDIDs against that code. A regression anywhere in the
-    /// `topMode` ladder that lets the envelope back in fails here across the
-    /// whole corpus, not just the three or four panels a spot check happens
-    /// to cover.
-    @Test("Sweep: needed bandwidth never exceeds the best real timing, across the whole corpus")
-    func neededBandwidthNeverExceedsTheBestRealTiming() throws {
+    /// Before this, `needed` could come from the 0xFD range-limits envelope
+    /// (a range of accepted signals, not a mode: up to 10x the real top in
+    /// this corpus), from a max mode scaled by a blanking ratio, or from a
+    /// 1.08 constant, and 15 blocks dropped the figure altogether behind an
+    /// envelope-ratio guard. None of those paths exists now, so every block
+    /// counts and the equality is exact. Watched red by making the
+    /// no-max-mode rule return `preferredMode` instead of `topMode`: every
+    /// panel whose declared top is not its preferred mode fails.
+    @Test("Sweep: needed bandwidth equals the declared top mode's pixel clock times bits per pixel, across the corpus")
+    func neededBandwidthEqualsTheDeclaredTopModesPixelClock() throws {
         let fm = FileManager.default
         guard let folders = try? fm.contentsOfDirectory(atPath: Self.probeRoot.path) else {
             return // fresh clone, corpus not synced; skip
@@ -865,7 +873,8 @@ struct DisplayDiagnosticProbeSweepTests {
 
         var foldersWithProbe33 = 0
         var evaluated = 0
-        var unreadable = 0
+        var noLinkRate = 0
+        let bitsPerPixel = Double(DisplayDiagnostic.assumedBitsPerPixel)
 
         for folder in folders {
             guard let text = Self.loadProbe33(folder: folder) else { continue }
@@ -888,24 +897,19 @@ struct DisplayDiagnosticProbeSweepTests {
                 guard let anglEnd = rest.range(of: "> ") else { continue }
                 let hexStr = String(rest[anglEnd.upperBound...]).trimmingCharacters(in: .whitespaces)
                 guard let data = Self.hexFromString(hexStr), let edidInfo = EDIDInfo(data) else { continue }
-                guard let timing = edidInfo.topDetailedTiming, timing.pixelClockHz > 0 else { continue }
+                let top = try #require(edidInfo.topMode, "\(folder) block \(i): a parsed EDID always has a top mode")
                 guard let diag = DisplayDiagnostic(dp: dp, edid: edidInfo) else { continue }
-                guard let needed = diag.facts.neededGbps else {
-                    // A parsed timing and no needed figure is legal on exactly
-                    // one path: the envelope sits far above every timing we
-                    // parsed, so the verdict declines to quote a top mode at
-                    // all. Anything else dropping the figure is a bug, and a
-                    // silent `continue` here would hide it.
-                    #expect(diag.bottleneck == .unknownMode,
-                        "\(folder) block \(i): neededGbps is nil on \(diag.bottleneck); only .unknownMode may drop it")
-                    unreadable += 1
-                    continue
-                }
+                if diag.facts.deliveredGbps == nil { noLinkRate += 1 }
 
                 evaluated += 1
-                let bestReal = Double(timing.pixelClockHz) * Double(DisplayDiagnostic.assumedBitsPerPixel) / 1_000_000_000
-                #expect(needed <= bestReal * (1 + DisplayDiagnostic.tolerance),
-                    "\(folder) block \(i): needed \(needed) Gbps exceeds the best real timing's \(bestReal) Gbps -- the envelope must be back in the comparison")
+                let expected = Double(top.pixelClockHz) * bitsPerPixel / 1_000_000_000
+                let needed = try #require(diag.facts.neededGbps,
+                    "\(folder) block \(i): neededGbps is nil on \(diag.bottleneck); with no CoreGraphics data the top mode is always declared")
+                #expect(abs(needed - expected) < 1e-9,
+                    "\(folder) block \(i): needed \(needed) Gbps is not the declared top's \(expected) Gbps (\(top.sourceDescription))")
+                #expect(diag.facts.topModeSource == top.sourceDescription,
+                    "\(folder) block \(i): top mode labelled \(String(describing: diag.facts.topModeSource)), declared top is \(top.sourceDescription)")
+                #expect(diag.facts.declaredModeCount == edidInfo.modes.count)
             }
         }
 
@@ -913,88 +917,10 @@ struct DisplayDiagnosticProbeSweepTests {
         // probe-33 folders, or one that lost most of its probe-33 files, must
         // not pass silently. Unconditional on purpose: the only SKIP path is
         // the absent directory handled by the early return above, which
-        // scripts/ci.sh's corpus-presence check owns.
-        #expect(evaluated >= 400,
-            "Only \(evaluated) blocks evaluated across \(foldersWithProbe33) folders with probe 33; expected at least 400 -- sweep may be near-vacuous")
-        print("neededBandwidthNeverExceedsTheBestRealTiming: evaluated \(evaluated) blocks (\(unreadable) more unreadable, no figure to check) across \(foldersWithProbe33) folders")
-    }
-
-    // MARK: - Sweep: DisplayID timings raise the top detailed timing
-
-    /// Ten corpus panels whose real top mode is declared only in a DisplayID
-    /// extension block (EDID tag 0x70), not the base block or the CTA-861
-    /// extension. `EDIDInfo.topDetailedTiming` must read it. `monitorName` is
-    /// a fixture guard: it proves `activeOffset` picked the panel the row
-    /// claims before trusting the timing assertions below it.
-    @Test("Sweep: ten corpus panels declare their real top mode in DisplayID, and topDetailedTiming reads it")
-    func sweepDisplayIDTimingsRaiseTheTopDetailedTiming() {
-        struct Row {
-            let folder: String
-            let activeOffset: Int
-            let monitorName: String
-            let width: Int
-            let height: Int
-            let refreshHz: Int
-            let pixelClockHz: Int
-        }
-        let rows: [Row] = [
-            Row(folder: "m3max_macos26.6.1_c", activeOffset: 1, monitorName: "Sceptre O34",
-                width: 3440, height: 1440, refreshHz: 165, pixelClockHz: 879_720_000),
-            Row(folder: "m1pro_macos26.5.2_z", activeOffset: 0, monitorName: "MAG274Q QD E2",
-                width: 2560, height: 1440, refreshHz: 180, pixelClockHz: 746_640_000),
-            Row(folder: "m4_macos26.5.1_n", activeOffset: 1, monitorName: "G274QPF E2",
-                width: 2560, height: 1440, refreshHz: 180, pixelClockHz: 746_640_000),
-            Row(folder: "m1pro_macos26.5.2_x", activeOffset: 0, monitorName: "Odyssey G85SB",
-                width: 2560, height: 1440, refreshHz: 175, pixelClockHz: 745_750_000),
-            Row(folder: "m5_macos26.5.1_l", activeOffset: 0, monitorName: "G34WQC A",
-                width: 3440, height: 1440, refreshHz: 144, pixelClockHz: 777_600_000),
-            Row(folder: "m3_macos26.5.2_h", activeOffset: 0, monitorName: "MSI PS341WU",
-                width: 5120, height: 2160, refreshHz: 60, pixelClockHz: 730_720_000),
-            Row(folder: "m1_macos26.5_m", activeOffset: 0, monitorName: "DELL U3425WE",
-                width: 3440, height: 1440, refreshHz: 120, pixelClockHz: 666_120_000),
-            Row(folder: "m4_macos27.0_t", activeOffset: 0, monitorName: "VG27AQ3A",
-                width: 2560, height: 1440, refreshHz: 180, pixelClockHz: 699_960_000),
-            Row(folder: "m3pro_macos26.5.2_h", activeOffset: 0, monitorName: "ARZOPA",
-                width: 2560, height: 1440, refreshHz: 180, pixelClockHz: 709_100_000),
-            Row(folder: "m1_macos26.6_e", activeOffset: 0, monitorName: "Beyond TV",
-                width: 3840, height: 2160, refreshHz: 144, pixelClockHz: 1_306_210_000),
-        ]
-
-        // SKIP path: the corpus directory itself is absent (fresh clone),
-        // same as the neighbouring sweeps in this file.
-        guard FileManager.default.fileExists(atPath: Self.probeRoot.path) else {
-            return
-        }
-
-        var checked = 0
-        for row in rows {
-            // A row whose own folder is missing (partial / tracked-only
-            // corpus) is skipped, not failed.
-            guard let data = Self.edidDataFromText(folder: row.folder, blockOffset: row.activeOffset) else {
-                continue
-            }
-            guard let edid = EDIDInfo(data) else {
-                Issue.record("\(row.folder): EDID bytes present but failed to parse")
-                continue
-            }
-            #expect(edid.monitorName == row.monitorName,
-                "\(row.folder): activeOffset \(row.activeOffset) expected monitor \(row.monitorName), got \(edid.monitorName ?? "nil")")
-            #expect(edid.topDetailedTiming?.width == row.width,
-                "\(row.folder) (\(row.monitorName)): topDetailedTiming.width")
-            #expect(edid.topDetailedTiming?.height == row.height,
-                "\(row.folder) (\(row.monitorName)): topDetailedTiming.height")
-            #expect(edid.topDetailedTiming?.refreshHz == row.refreshHz,
-                "\(row.folder) (\(row.monitorName)): topDetailedTiming.refreshHz")
-            #expect(edid.topDetailedTiming?.pixelClockHz == row.pixelClockHz,
-                "\(row.folder) (\(row.monitorName)): topDetailedTiming.pixelClockHz")
-            checked += 1
-        }
-
-        // A folder going missing must be loud, not silent. The corpus root
-        // was already confirmed present above, and git tracks the whole
-        // corpus now, so a present root with missing row folders is a broken
-        // checkout, not a fresh clone: this assertion does not get to skip.
-        #expect(checked == 10, "Expected all 10 corpus panels to be checked, got \(checked)")
-        print("sweepDisplayIDTimingsRaiseTheTopDetailedTiming: checked \(checked) of \(rows.count) rows")
+        // scripts/ci.sh's corpus-presence check owns. 608 blocks evaluated at
+        // the time of writing (593 + the 15 the old envelope guard dropped).
+        #expect(evaluated >= 550,
+            "Only \(evaluated) blocks evaluated across \(foldersWithProbe33) folders with probe 33; expected at least 550 -- sweep may be near-vacuous")
+        print("neededBandwidthEqualsTheDeclaredTopModesPixelClock: evaluated \(evaluated) blocks (\(noLinkRate) of them with no readable link rate) across \(foldersWithProbe33) folders")
     }
 }
