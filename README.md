@@ -310,6 +310,10 @@ More device data means better hardware coverage, fewer edge-case bugs, and more 
 
 Cable reports are also very welcome. If you have an e-marked cable, use the "Report this cable" button in the app (or `whatcable --report` from the CLI) to submit its fingerprint. These reports build the bundled cable database so WhatCable can show brand and model info for known cables. Every report you submit helps other users identify their cables at a glance.
 
+### Research references
+
+Some comments and docs cite files under `research/` (for example `research/displays/display-node-keys.md`). That folder is my private research library, built from raw diagnostic dumps off real machines, and it is not part of this repo. The references stay so each decision names its evidence, even where you cannot open it.
+
 ## Credits
 
 Built by [Darryl Morley](https://github.com/darrylmorley).
