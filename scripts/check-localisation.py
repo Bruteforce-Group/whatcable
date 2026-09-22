@@ -230,6 +230,12 @@ KNOWN_MISSING = {
 # Same idea for a language carrying a key English does not.
 KNOWN_EXTRA = {
     ("WhatCable (app)", "uk", ".stringsdict"): {"%lld displays connected"},
+    ("WhatCable (app)", "lv", ".stringsdict"): {
+        "%lld displays connected",
+        "%lld USB-C ports and 1 MagSafe port detected, but nothing is currently plugged in. Turn off \"Hide empty ports\" in Settings to see them.",
+        "%lld USB-C ports detected, but nothing is currently plugged in. Turn off \"Hide empty ports\" in Settings to see them.",
+    },
+    ("WhatCableCore", "lv", ".stringsdict"): {"%lld displays connected"},
 }
 
 # Values that are byte-identical to English on purpose: loanwords, unit
@@ -412,7 +418,8 @@ ALLOWED_IDENTICAL = {
             "50-200 µW", "< 50 µW", "> 10 mW", "Battery full, not drawing power",
             "Built-in %1$@ port %2$lld",
             "High-resolution displays often use compression (DSC) to fit their top mode through a link like this, so selecting the higher mode in Display settings may reach it normally.",
-            "Isn't performing as expected", "Licence…", "MagSafe 3",
+            "CC Advertisement", "Isn't performing as expected", "Licence…", "MagSafe 3",
+            "Raw VDOs", "Raw cable VDOs", "Re-driver", "Re-timer",
             "No problems seen while watching this cable.", "Not performing as expected",
             "Performing as expected",
             "Saw a brief drop or a single high reading. Not conclusive; still watching.",
