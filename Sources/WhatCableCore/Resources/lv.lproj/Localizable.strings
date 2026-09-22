@@ -407,7 +407,7 @@
 "No problems seen while watching this cable." = "Vērojot šo kabeli, problēmas netika konstatētas.";
 "Saw a brief drop or a single high reading. Not conclusive; still watching." = "Konstatēts īslaicīgs kritums vai atsevišķs augsts rādījums. Secinājums nav viennozīmīgs; novērošana turpinās.";
 "Not performing as expected" = "Nedarbojas, kā paredzēts";
-"Isn't performing as expected" = "nedarbojas, kā paredzēts";
+"Isn't performing as expected" = "Nedarbojas, kā paredzēts";
 
 /* Power Monitor system power source indicator. */
 "Battery" = "Akumulators";

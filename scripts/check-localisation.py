@@ -414,15 +414,10 @@ ALLOWED_IDENTICAL = {
             "USB4 Gen 4 (80 Gbps)", "Variable, %@ to %@ @ %@", "WhatCable Pro",
         },
         "lv": {
-            "%lld displays connected", "%lld × %lld", "1-5 mW", "3 A", "5 A", "5-10 mW",
-            "50-200 µW", "< 50 µW", "> 10 mW", "Battery full, not drawing power",
-            "Built-in %1$@ port %2$lld",
-            "High-resolution displays often use compression (DSC) to fit their top mode through a link like this, so selecting the higher mode in Display settings may reach it normally.",
-            "CC Advertisement", "Isn't performing as expected", "Licence…", "MagSafe 3",
+            "%lld × %lld", "1-5 mW", "3 A", "5 A", "5-10 mW",
+            "50-200 µW", "< 50 µW", "> 10 mW",
+            "CC Advertisement", "Licence…", "MagSafe 3",
             "Raw VDOs", "Raw cable VDOs", "Re-driver", "Re-timer",
-            "No problems seen while watching this cable.", "Not performing as expected",
-            "Performing as expected",
-            "Saw a brief drop or a single high reading. Not conclusive; still watching.",
             "Thunderbolt", "Thunderbolt / USB4", "USB 2.0 (480 Mbps)",
             "USB 3.2 Gen 1 (5 Gbps)", "USB 3.2 Gen 2 (10 Gbps)", "USB4 Gen 3 (20 / 40 Gbps)",
             "USB4 Gen 4 (80 Gbps)", "Video", "WhatCable Pro", "video",
@@ -603,8 +598,7 @@ ALLOWED_IDENTICAL = {
             "Gen 1", "Pro", "SuperSpeed", "USB",
         },
         "lv": {
-            "%lld displays connected", "Built-in %1$@ port %2$lld", "Display connected", "Pro",
-            "SuperSpeed", "USB",
+            "Pro", "SuperSpeed", "USB",
         },
         "nb": {
             "%lld displays connected", "Built-in %1$@ port %2$lld", "Display connected",
