@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "현재 협상 결과: %1$@ @ %2$@ (%3$@)";
 "Display connected" = "디스플레이 연결됨";
 "Display connected · %lldW charger" = "디스플레이 연결됨 · %lldW 충전기";
+"Display connected, data blocked" = "디스플레이 연결됨, 데이터 차단됨";
+"Display connected, data blocked · %lldW charger" = "디스플레이 연결됨, 데이터 차단됨 · %lldW 충전기";
 "DisplayPort video over USB-C Alt Mode." = "USB-C Alt Mode로 DisplayPort 영상을 전송하고 있어요.";
 "E-marker claims EPR support but reports only 20V max VBUS" = "E-marker가 EPR을 지원한다고 하지만 최대 VBUS는 20V로만 보고함";
 "E-marker reports no vendor identity" = "E-marker가 벤더 정보를 보고하지 않음";

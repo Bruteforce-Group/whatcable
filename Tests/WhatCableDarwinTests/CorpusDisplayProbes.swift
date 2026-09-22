@@ -464,6 +464,13 @@ enum CorpusDisplayProbes {
 
     /// `account(folder:)` over the whole corpus. nil when the corpus is
     /// absent (scripts/ci.sh's presence check owns that failure).
+    /// Note on the folder figure this prints: `contentsOfDirectory` is not
+    /// filtered to directories, so it counts the 7 rollup files beside the
+    /// machine folders (`corpus.jsonl`, `index.md`, `assessment.md`,
+    /// `skipped.md`, `machine-hashes.json`, `class-baseline.json`,
+    /// `key-census.json`). Its "1531" is 1524 machines plus those 7. Comments
+    /// quoting a print line verbatim keep the printed number; comments stating
+    /// the corpus size use the machine count.
     static func accountCorpus() -> CorpusAccounting? {
         guard let folders = try? FileManager.default.contentsOfDirectory(atPath: probeRoot.path) else { return nil }
         var captured = 0, eligible = 0, noBlock = 0, several = 0, noKey = 0

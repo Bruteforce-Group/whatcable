@@ -171,6 +171,7 @@ struct DisplayTimingReaderProbeSweepTests {
         var incomplete: [String] = []
         var shapeTested = 0, shapeEmpty = 0, shapeEqual = 0
         var shapeOther: [String] = []
+        var shapePartial: [String] = []
         var idsOutside: [String] = []
         var colourModesSampled = 0, dscListSampled = 0, unsafeListSampled = 0
         var headerBelowPrinted: [String] = []
@@ -254,6 +255,16 @@ struct DisplayTimingReaderProbeSweepTests {
                         shapeEmpty += 1
                     } else if listed == capableAll {
                         shapeEqual += 1
+                    } else if listed.isSubset(of: capableAll) {
+                        // A PARTIAL list: some DSC-capable modes need compression on this
+                        // link and others do not. Legitimate, and the shape the rule missed
+                        // until the corpus grew past 1408 folders. First and only case at
+                        // 1524 folders: m2ultra_macos27.0_c timing 91, list [102] against
+                        // capable [1, 96, 100, 101, 102]. Mode 102 is the node's only 10-bit
+                        // mode; 1, 96, 100 and 101 are all 8-bit. 10-bit costs about 25% more
+                        // bandwidth, so the 8-bit modes fit this link uncompressed and the
+                        // 10-bit one does not. Naming just that mode is correct.
+                        shapePartial.append("\(tag): list \(listed.sorted()) against capable \(capableAll.sorted())")
                     } else {
                         shapeOther.append("\(tag): list \(listed.sorted()) against capable \(capableAll.sorted())")
                     }
@@ -277,7 +288,8 @@ struct DisplayTimingReaderProbeSweepTests {
             }
         }
 
-        print("DisplayTimingReaderProbeSweep/statement: \(nodesWithTables) nodes with tables; \(timingsSeen) timings seen, \(timingsParsed) parsed, \(unparsed.count) unparsed (named), \(drivenCaptured) driven captured; shape tested \(shapeTested) (sampled skips \(shapeSampledSkipped), incomplete \(incomplete.count)): empty \(shapeEmpty), equal \(shapeEqual), other \(shapeOther.count), IDs outside \(idsOutside.count); SKIP sampled: ColorModes \(colourModesSampled), DSC list \(dscListSampled), unsafe list \(unsafeListSampled); SupportsDSC=0 pairs \(dsc0Pairs), members \(dsc0Members.count); DownstreamFormat modes \(downstreamModes) on \(downstreamNodes.count) nodes (\(downstreamNot420.count) not 4:2:0), on driven timings \(drivenDownstreamModes) modes on \(drivenDownstreamNodes.count) nodes; ValidPixelEncodings virtual@ffffffff \(virtualAtFFFF), virtual elsewhere \(virtualElsewhere.count), real@ffffffff \(realAtFFFF.count), real elsewhere \(realElsewhere); native-DP unsafe pairs \(dpUnsafePairs), members \(dpUnsafeMembers.count)")
+        print("DisplayTimingReaderProbeSweep/statement: \(nodesWithTables) nodes with tables; \(timingsSeen) timings seen, \(timingsParsed) parsed, \(unparsed.count) unparsed (named), \(drivenCaptured) driven captured; shape tested \(shapeTested) (sampled skips \(shapeSampledSkipped), incomplete \(incomplete.count)): empty \(shapeEmpty), equal \(shapeEqual), partial \(shapePartial.count), other \(shapeOther.count), IDs outside \(idsOutside.count); SKIP sampled: ColorModes \(colourModesSampled), DSC list \(dscListSampled), unsafe list \(unsafeListSampled); SupportsDSC=0 pairs \(dsc0Pairs), members \(dsc0Members.count); DownstreamFormat modes \(downstreamModes) on \(downstreamNodes.count) nodes (\(downstreamNot420.count) not 4:2:0), on driven timings \(drivenDownstreamModes) modes on \(drivenDownstreamNodes.count) nodes; ValidPixelEncodings virtual@ffffffff \(virtualAtFFFF), virtual elsewhere \(virtualElsewhere.count), real@ffffffff \(realAtFFFF.count), real elsewhere \(realElsewhere); native-DP unsafe pairs \(dpUnsafePairs), members \(dpUnsafeMembers.count)")
+        for line in shapePartial { print("  PARTIAL \(line)") }
         for line in shapeOther { print("  SHAPE \(line)") }
         for line in idsOutside { print("  OUTSIDE \(line)") }
         for line in dsc0Members { print("  DSC0 MEMBER \(line)") }
@@ -303,7 +315,17 @@ struct DisplayTimingReaderProbeSweepTests {
         // native-DP unsafe pairs 22317, members 0. Re-derive them from a run, never copy them.
         #expect(shapeTested >= 3900, "only \(shapeTested) timings entered the shape test")
         #expect(shapeEqual >= 450, "only \(shapeEqual) timings with the list equal to the DSC-capable set")
-        #expect(shapeOther.isEmpty, "\(shapeOther.count) timings with a list that is neither empty nor the DSC-capable set:\n\(shapeOther.joined(separator: "\n"))")
+        // A list may be empty, the whole DSC-capable set, or a subset of it. What it may
+        // never be is a list naming a mode that is not DSC-capable: that would contradict
+        // SupportsDSC, which `dsc0Members` below asserts separately over every pair.
+        #expect(shapeOther.isEmpty, "\(shapeOther.count) timings with a list naming a mode outside the DSC-capable set:\n\(shapeOther.joined(separator: "\n"))")
+        // EXACT, not a ceiling. A ceiling of <= 1 also accepts zero, and zero is
+        // reachable by regression: if the reader stopped marking modes 1, 96, 100
+        // and 101 DSC-capable, timing 91's list would equal the capable set and
+        // reclassify as shapeEqual, passing a ceiling silently. The identity is
+        // pinned for the same reason.
+        #expect(shapePartial.count == 1, "\(shapePartial.count) partial DSC-required lists; the current corpus measures exactly 1. A new one is investigated, not absorbed:\n\(shapePartial.joined(separator: "\n"))")
+        #expect(shapePartial.first?.contains("m2ultra_macos27.0_c") == true && shapePartial.first?.contains("timing 91") == true, "the known partial list is m2ultra_macos27.0_c timing 91 (its only 10-bit mode, where the other DSC-capable modes are 8-bit); got \(shapePartial)")
         #expect(idsOutside.isEmpty, "\(idsOutside.count) lists naming an ID no colour mode carries")
         #expect(dsc0Pairs >= 20000 && dsc0Members.isEmpty, "\(dsc0Members.count) SupportsDSC=0 modes in a DSC list, over \(dsc0Pairs) pairs")
         #expect(downstreamModes >= 300 && downstreamNot420.isEmpty, "\(downstreamModes) downstream formats, \(downstreamNot420.count) not 4:2:0")
@@ -312,7 +334,7 @@ struct DisplayTimingReaderProbeSweepTests {
         #expect(realElsewhere >= 1300 && realAtFFFF.isEmpty, "real timings at 0xffffffff: \(realAtFFFF.count)")
         #expect(dpUnsafePairs >= 20000 && dpUnsafeMembers.isEmpty, "native DP unsafe members: \(dpUnsafeMembers.count) over \(dpUnsafePairs) pairs")
         #expect(headerBelowPrinted.isEmpty, "a sampled header undercounting its printed items:\n\(headerBelowPrinted.joined(separator: "\n"))")
-        #expect(shapeEmpty + shapeEqual + shapeOther.count == shapeTested, "every tested timing is classified")
+        #expect(shapeEmpty + shapeEqual + shapePartial.count + shapeOther.count == shapeTested, "every tested timing is classified")
         // Ruling 45's identities for a whole-corpus sweep: the raw totals come from the loader, not from
         // production, so a floor on them guards only against an empty or partial corpus; what guards the
         // parse is the accounting. Replica 2026-09-21: 6729 seen, 6710 parsed, 19 unparsed (the entries
@@ -423,7 +445,7 @@ struct DisplayTimingReaderProbeSweepTests {
         // Ruling 45: the population first. The loader computed it from the raw probes; production
         // match attached it; every eligible node is attached or named. Replica of the production
         // match, 2026-09-21: 260 captured, 231 eligible (15 no block, 14 several), 231 attached, 0 failures.
-        #expect(corpus.eligible == 231, "eligible population \(corpus.eligible), replica 231: \(corpus.summary)")
+        #expect(corpus.eligible == 260, "eligible population \(corpus.eligible), 231 at 1408 folders, 260 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0. \(corpus.summary)")
         #expect(corpus.unnamedFailures.isEmpty, "eligible nodes production match did not attach and knownExceptions does not name:\n\(corpus.unnamedFailures.map(\.description).joined(separator: "\n"))")
         #expect(corpus.attached.count == corpus.eligible - CorpusDisplayProbes.knownExceptions.count, "attached \(corpus.attached.count) is not eligible \(corpus.eligible) minus the \(CorpusDisplayProbes.knownExceptions.count) known exceptions")
         #expect(paired == corpus.attached.count, "every attached node carries a statement and a live mode")
@@ -457,12 +479,12 @@ struct DisplayTimingReaderProbeSweepTests {
         // may be the capture's truncation rather than the node's statement; a live read is never
         // sampled.
         #expect(noDeclaredTop == 0, "\(noDeclaredTop) attached nodes with no declared top")
-        #expect(beforeNotListed == 19, "before ruling 41 the declared top was not listed on \(beforeNotListed) nodes; the replica measured 19")
-        #expect(changedTop.count == 19, "ruling 41 moved the top on \(changedTop.count) nodes; the replica measured 20, less the G85SB since fix round 4 (19)")
+        #expect(beforeNotListed == 21, "before ruling 41 the declared top was not listed on \(beforeNotListed) nodes; 19 at 1408 folders, 21 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); every violation count beside it stayed 0.")
+        #expect(changedTop.count == 21, "ruling 41 moved the top on \(changedTop.count) nodes; 19 at 1408 folders, 21 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); every violation count beside it stayed 0.")
         #expect(changedTop.count + belowNotListed.count >= beforeNotListed, "every node whose declared top the node never listed must resolve elsewhere or be named not listed: \(beforeNotListed) were not listed, \(changedTop.count) changed, \(belowNotListed.count) kept as not listed")
         #expect(atTopViolations.isEmpty, "\(atTopViolations.count) nodes driven at the top whose top the node does not list:\n\(atTopViolations.joined(separator: "\n"))")
-        #expect(atTop == 218 && atTopExact == 176 && atTopSameRefresh == 42, "at the top \(atTop) (exact \(atTopExact), same refresh \(atTopSameRefresh)); the replica measured 219 (177, 42), less the G85SB since fix round 4 (218, 176)")
-        #expect(belowTop == 13 && belowExact == 3 && belowSameRefresh == 0 && belowPictureOnly.count == 9, "below the top \(belowTop) (exact \(belowExact), same refresh \(belowSameRefresh), picture only \(belowPictureOnly.count)); the replica measured 12 (3, 0, 9), plus the G85SB since fix round 4 (13)")
+        #expect(atTop == 240 && atTopExact == 194 && atTopSameRefresh == 46, "at the top \(atTop) (exact \(atTopExact), same refresh \(atTopSameRefresh)); 218 (176, 42) at 1408 folders, 240 (194, 46) at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); every violation count beside it stayed 0.")
+        #expect(belowTop == 20 && belowExact == 5 && belowSameRefresh == 1 && belowPictureOnly.count == 13, "below the top \(belowTop) (exact \(belowExact), same refresh \(belowSameRefresh), picture only \(belowPictureOnly.count)); 13 (3, 0, 9) at 1408 folders, 20 (5, 1, 13) at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
         #expect(belowNotListed.count == 1 && belowNotListed.allSatisfy { $0.hasPrefix("m1pro_macos26.5.2_x block 1") }, "\(belowNotListed.count) nodes whose resolved top the node never lists; fix round 4 measured exactly one, the G85SB:\n\(belowNotListed.joined(separator: "\n"))")
         #expect(atTop + belowTop + noDeclaredTop == paired, "every paired node is classified")
     }

@@ -916,12 +916,24 @@ extension PortSummary {
                 : String(localized: "Carrying both data and DisplayPort video.", bundle: _coreLocalizedBundle)
         } else if hasDP {
             self.status = .displayCable
+            // A port can carry a working display while macOS withholds its data
+            // transports. Before this branch consulted `dataWithheld` the card
+            // said only "Display connected", so the one fact the user cannot see
+            // for themselves, that their accessory is waiting for approval, was
+            // never stated (#681, m4pro_macos26.6.2_m port 1). The branch above
+            // already handles the same pair; this mirrors it.
             if let w = chargerW {
-                self.headline = String(localized: "Display connected · \(w)W charger", bundle: _coreLocalizedBundle) + cableLimitSuffix
+                self.headline = (dataWithheld
+                    ? String(localized: "Display connected, data blocked · \(w)W charger", bundle: _coreLocalizedBundle)
+                    : String(localized: "Display connected · \(w)W charger", bundle: _coreLocalizedBundle)) + cableLimitSuffix
             } else {
-                self.headline = String(localized: "Display connected", bundle: _coreLocalizedBundle) + cableLimitSuffix
+                self.headline = (dataWithheld
+                    ? String(localized: "Display connected, data blocked", bundle: _coreLocalizedBundle)
+                    : String(localized: "Display connected", bundle: _coreLocalizedBundle)) + cableLimitSuffix
             }
-            self.subtitle = String(localized: "DisplayPort video over USB-C Alt Mode.", bundle: _coreLocalizedBundle)
+            self.subtitle = dataWithheld
+                ? String(localized: "Video is working. macOS is holding data back until you approve the accessory.", bundle: _coreLocalizedBundle)
+                : String(localized: "DisplayPort video over USB-C Alt Mode.", bundle: _coreLocalizedBundle)
         } else if hasCorroboratedUSB3 {
             self.status = .dataDevice
             if let w = chargerW {

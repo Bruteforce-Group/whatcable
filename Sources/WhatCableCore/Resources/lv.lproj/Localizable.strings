@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "Pašlaik saskaņots: %1$@ @ %2$@ (%3$@)";
 "Display connected" = "Displejs pievienots";
 "Display connected · %lldW charger" = "Displejs pievienots · %lld W lādētājs";
+"Display connected, data blocked" = "Displejs pievienots, dati bloķēti";
+"Display connected, data blocked · %lldW charger" = "Displejs pievienots, dati bloķēti · %lld W lādētājs";
 "DisplayPort video over USB-C Alt Mode." = "DisplayPort video caur USB-C alt režīmu.";
 "E-marker claims EPR support but reports only 20V max VBUS" = "E-marker norāda EPR atbalstu, bet ziņo tikai 20 V maks. VBUS";
 "E-marker reports no vendor identity" = "E-marker neziņo ražotāja identitāti";

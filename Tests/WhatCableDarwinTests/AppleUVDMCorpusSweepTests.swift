@@ -321,9 +321,15 @@ struct AppleUVDMCorpusSweepTests {
             distinctVendorIDs.insert(vendorID)
         }
 
-        // Hard invariant: Apple-only is a load-bearing claim in the ticket.
-        #expect(distinctVendorIDs == [0x05AC],
-            "Expected every Vendor ID in the corpus to be 0x05AC (1452); got \(distinctVendorIDs)")
+        // Hard invariant: no NON-APPLE vendor claims a UVDM identity. Apple-only is a
+        // load-bearing claim in the ticket, and it still holds; 0 is not another vendor.
+        // Owner ruling 2026-09-22: a Vendor ID of 0 is common on Apple gear and is accepted,
+        // not rejected. It first appeared with the 2026-09-22 ingest (corpus 1408 -> 1524).
+        // Bounded BOTH ways on purpose. `subtracting(...).isEmpty` alone also
+        // passes on an empty set, so a parser regression dropping every
+        // "Vendor ID" property would satisfy a check called a hard invariant.
+        #expect(distinctVendorIDs == [0x05AC, 0],
+            "Expected the corpus Vendor IDs to be exactly 0x05AC (1452) and 0; got \(distinctVendorIDs)")
     }
 
     @Test("Identifiers are never dropped: control-byte serials stay byte-identical, EV nodes stay on the model without a name")

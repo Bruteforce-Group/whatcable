@@ -545,6 +545,10 @@ struct CIOAndDataLinkCorpusTests {
             "m4_macos26.5_b",
             "m4_macos27.0_k",
             "m4pro_macos26.6.2_d",
+            // Added 2026-09-22 with the 116-machine ingest (the 2026-09-22 ingest,
+            // corpus 1408 -> 1524): the same empty-peer signature on a new
+            // machine, not a new shape.
+            "m5_macos27.0_x",
             "m5pro_macos26.5.2_b",
             "m5pro_macos27.0_d",
         ], "Empty-peer signature folders: \(emptyPeer)")

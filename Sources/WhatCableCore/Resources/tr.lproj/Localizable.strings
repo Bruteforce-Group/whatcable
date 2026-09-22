@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "Şu an müzakere edildi: %1$@ @ %2$@ (%3$@)";
 "Display connected" = "Ekran bağlı";
 "Display connected · %lldW charger" = "Ekran bağlı · %lldW şarj aleti";
+"Display connected, data blocked" = "Ekran bağlı, veri engellendi";
+"Display connected, data blocked · %lldW charger" = "Ekran bağlı, veri engellendi · %lldW şarj aleti";
 "DisplayPort video over USB-C Alt Mode." = "USB-C Alt Mode üzerinden DisplayPort video.";
 "E-marker claims EPR support but reports only 20V max VBUS" = "E-marker EPR desteği iddia ediyor ancak yalnızca 20V maks. VBUS bildiriyor";
 "E-marker reports no vendor identity" = "E-marker satıcı kimliği bildirmiyor";

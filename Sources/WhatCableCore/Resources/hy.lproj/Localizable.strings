@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "Ներկայումս համաձայնեցված է՝ %1$@ @ %2$@ (%3$@)";
 "Display connected" = "Էկրանը միացված է";
 "Display connected · %lldW charger" = "Էկրանը միացված է · %lldW լիցքավորիչ";
+"Display connected, data blocked" = "Էկրանը միացված է, տվյալները արգելափակված են";
+"Display connected, data blocked · %lldW charger" = "Էկրանը միացված է, տվյալները արգելափակված են · %lldW լիցքավորիչ";
 "DisplayPort video over USB-C Alt Mode." = "DisplayPort տեսանյութ USB-C alt ռեժիմով:";
 "E-marker claims EPR support but reports only 20V max VBUS" = "E-marker-ը հայտնում է EPR աջակցության մասին, բայց հաղորդում է միայն 20Վ առավելագույն VBUS";
 "E-marker reports no vendor identity" = "E-marker-ը չի հայտնում արտադրողի ինքնությունը";

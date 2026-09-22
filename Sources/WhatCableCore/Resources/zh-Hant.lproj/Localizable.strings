@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "目前協商：%1$@ @ %2$@ (%3$@)";
 "Display connected" = "已連接顯示器";
 "Display connected · %lldW charger" = "已連接顯示器 · %lldW 充電器";
+"Display connected, data blocked" = "已連接顯示器，資料傳輸已封鎖";
+"Display connected, data blocked · %lldW charger" = "已連接顯示器，資料傳輸已封鎖 · %lldW 充電器";
 "DisplayPort video over USB-C Alt Mode." = "透過 USB-C Alt Mode 傳輸 DisplayPort 影像。";
 "E-marker claims EPR support but reports only 20V max VBUS" = "E-marker 聲稱支援 EPR，但回報的最大 VBUS 只有 20V";
 "E-marker reports no vendor identity" = "E-marker 未回報廠商識別資訊";

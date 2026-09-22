@@ -142,7 +142,7 @@ struct PowerSourceSupplyKindCorpusSweepTests {
         // intended. Re-measure and raise it; do not delete it. Floors are not
         // threatened by growth, only by a corpus that shrinks, which in
         // practice means a partial checkout.
-        #expect(blocks >= 1032, "only \(blocks) winning-option blocks found against 1122 measured; parser is probably broken")
+        #expect(blocks >= 1032, "only \(blocks) winning-option blocks found against 1266 measured; parser is probably broken")
         #expect(missingClass.isEmpty, "winning options with no Class key: \(missingClass.prefix(5))")
         #expect(notFixed.isEmpty, "winning options that did not parse as fixed: \(notFixed.prefix(5))")
         #expect(fixed == blocks)
@@ -157,18 +157,23 @@ struct PowerSourceSupplyKindCorpusSweepTests {
         // rounds of this PR. Probe 17 has no such duplicate section today,
         // which is exactly why a reader that grew one would go unnoticed.
         //
-        // Measured 2026-09-03 by a line-based Python reader sharing no code
-        // with this sweep: 1122 blocks, 661 dash, 461 equals, spread over 672
-        // of the 1339 folders carrying an untruncated probe 17.
+        // Re-derived 2026-09-22 by a Python reader using this sweep's own two
+        // block regexes but none of its code: 1266 blocks, 734 dash, 532
+        // equals, spread over 746 of the 1454 folders carrying an untruncated
+        // probe 17. (2026-09-03, at 1339 untruncated folders: 1122 / 661 / 461
+        // over 672.) The ceilings below stay 12% above measured, so they keep
+        // the tolerance the paragraph after this one describes; setting one to
+        // the measured value exactly would turn the next ingest red on a
+        // healthy corpus.
         //
         // These were 40% above measured, which is where the 165-block dash
         // double-count got through: 826 dash blocks against a ceiling of 925.
         // At 12% the same mutation fails on the dash ceiling (740) and on the
         // total (1256 against 1287 blocks), which was checked by running it,
         // not by arithmetic alone.
-        #expect(blocks <= 1256, "\(blocks) winning-option blocks found against 1122 measured; a reader counting the same block twice looks like this")
-        #expect(dashShapeBlocks <= 740, "\(dashShapeBlocks) flat blocks against 661 measured; suspect double counting")
-        #expect(equalsShapeBlocks <= 516, "\(equalsShapeBlocks) nested blocks against 461 measured; suspect double counting")
+        #expect(blocks <= 1418, "\(blocks) winning-option blocks found against 1122 measured; a reader counting the same block twice looks like this")
+        #expect(dashShapeBlocks <= 822, "\(dashShapeBlocks) flat blocks against 734 measured; suspect double counting")
+        #expect(equalsShapeBlocks <= 596, "\(equalsShapeBlocks) nested blocks against 532 measured; suspect double counting")
 
         // Folder-level tolerance, and what it does NOT cover. These two
         // floors catch a checkout whose research symlink resolved but reached

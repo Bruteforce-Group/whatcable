@@ -442,7 +442,8 @@ struct PortSummaryCorpusSweepTests {
     // cable e-marker with VDO[3] and so classify at all. Of those, 12 are
     // promoted to active by the port controller's `ActiveCable` flag, 1 by
     // the active-cable layout contradiction, and the remaining 749 are the
-    // e-marker's own word.
+    // e-marker's own word. Re-derived 2026-09-22 at 1524 folders: the
+    // promotion set is 16, the layout contradiction still 1.
     //
     // The classifiable figure was 764 (and the e-marker figure 751) until
     // `cableVDO` stopped decoding VDO[3] for a non-cable responder (issue
@@ -469,7 +470,18 @@ struct PortSummaryCorpusSweepTests {
         "m3_macos26.5.2_e port 2",      // VID 0x20C2, VDO[3] 0x350A4E42
         "m4_macos26.5.2_s port 2",      // VID 0x2B1D, VDO[3] 0x32084842
         "m4_macos26.6.2_f port 4",      // VID 0x2B1D, VDO[3] 0x32084842
-        "m5pro_macos26.5.1_c port 3"    // VID 0x2B1D, VDO[3] 0x32084842
+        "m5pro_macos26.5.1_c port 3",   // VID 0x2B1D, VDO[3] 0x32084842
+        // Added 2026-09-22 with the 116-machine ingest (the 2026-09-22 ingest,
+        // corpus 1408 -> 1524). Each was read back from probe 01 and carries
+        // `ActiveCable = true` on its own port block, so each is the same
+        // port-controller promotion the twelve above are, not a new shape.
+        // Three are the familiar Lintes 0x2B1D active cables. The first is a
+        // zeroed-VID e-marker, which is why its VDO is the only identity it
+        // has; the promotion does not depend on the VID.
+        "m1_macos15.7.7_i port 1",      // VID 0x0000, VDO[3] 0x000A2643
+        "m2max_macos27.0_f port 1",     // VID 0x2B1D, VDO[3] 0x3208485A
+        "m2max_macos27.0_f port 3",     // VID 0x2B1D, VDO[3] 0x32084842
+        "m2ultra_macos27.0_c port 6"    // VID 0x2B1D, VDO[3] 0x450A4E42
     ]
 
     /// VID 0x0138, VDO[3] 0x0008404A. The controller flag is false here, so

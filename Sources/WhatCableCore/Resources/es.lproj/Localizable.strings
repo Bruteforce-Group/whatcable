@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "Negociación actual: %1$@ @ %2$@ (%3$@)";
 "Display connected" = "Pantalla conectada";
 "Display connected · %lldW charger" = "Pantalla conectada · cargador de %lld W";
+"Display connected, data blocked" = "Pantalla conectada, datos bloqueados";
+"Display connected, data blocked · %lldW charger" = "Pantalla conectada, datos bloqueados · cargador de %lld W";
 "DisplayPort video over USB-C Alt Mode." = "Vídeo DisplayPort a través de modo alternativo USB-C.";
 "E-marker claims EPR support but reports only 20V max VBUS" = "El e-marker anuncia soporte EPR pero reporta solo 20 V máx. VBUS";
 "E-marker reports no vendor identity" = "El e-marker no reporta identidad de fabricante";

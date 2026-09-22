@@ -47,6 +47,8 @@
 "Currently negotiated: %@ @ %@ (%@)" = "Поточний договір: %1$@ @ %2$@ (%3$@)";
 "Display connected" = "Дисплей підключено";
 "Display connected · %lldW charger" = "Дисплей підключено · зарядний пристрій %lldW";
+"Display connected, data blocked" = "Дисплей підключено, передавання даних заблоковано";
+"Display connected, data blocked · %lldW charger" = "Дисплей підключено, передавання даних заблоковано · зарядний пристрій %lldW";
 "DisplayPort video over USB-C Alt Mode." = "Відео DisplayPort через USB-C Alt Mode.";
 "E-marker claims EPR support but reports only 20V max VBUS" = "E-marker заявляє підтримку EPR, але повідомляє лише 20V максимум VBUS";
 "E-marker reports no vendor identity" = "E-marker не містить ідентифікатора виробника";

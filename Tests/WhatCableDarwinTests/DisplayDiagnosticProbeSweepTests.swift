@@ -1329,18 +1329,18 @@ struct DisplayDiagnosticProbeSweepTests {
         // Measured by this sweep on 2026-09-21 over 1415 folders (the print lines above, verbatim):
         //   DisplayDiagnosticProbeSweep/#664 population: 1415 folders, 260 captured driven timings, 231 eligible (15 with no active block carrying the key, 14 with several, 0 unkeyable nodes), attached 231, failures 0, known exceptions 0
         //   DisplayDiagnosticProbeSweep/#664: 231 paired driven timings; SKIP sampled 57, incomplete 0, no link 1; empty list 137 (0 not uncompressed); Apple with DSC-capable modes 29 (0 violations), Apple without 9; non-Apple rule-marked 8: list wrong 0, every non-virtual mode listed 5, mixed 3, verdict wrong 0
-        #expect(corpus.eligible == 231, "eligible population \(corpus.eligible), replica 231: \(corpus.summary)")
+        #expect(corpus.eligible == 260, "eligible population \(corpus.eligible), 231 at 1408 folders, 260 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0. \(corpus.summary)")
         #expect(corpus.unnamedFailures.isEmpty, "eligible nodes production match did not attach and knownExceptions does not name:\n\(corpus.unnamedFailures.map(\.description).joined(separator: "\n"))")
         #expect(corpus.attached.count == corpus.eligible - CorpusDisplayProbes.knownExceptions.count, "attached \(corpus.attached.count) is not eligible \(corpus.eligible) minus the known exceptions")
         #expect(paired == corpus.attached.count)
-        #expect(sampledSkipped.count == 57, "sampled driven lists \(sampledSkipped.count); the replica measured 57")
+        #expect(sampledSkipped.count == 63, "sampled driven lists \(sampledSkipped.count); the replica measured 57")
         #expect(incomplete.isEmpty, "\(incomplete.count) attached nodes with an incomplete driven timing; the corpus has none (ruling 20):\n\(incomplete.joined(separator: "\n"))")
-        #expect(emptyList == 137 && emptyListNotUncompressed.isEmpty, "empty-list driven timings \(emptyList) (replica 137), \(emptyListNotUncompressed.count) not read as uncompressed")
-        #expect(appleDSC == 29 && appleViolations.isEmpty, "Apple displays with a DSC-capable mode \(appleDSC) (replica 29), \(appleViolations.count) not read as DSC on with no link blame")
+        #expect(emptyList == 155 && emptyListNotUncompressed.isEmpty, "empty-list driven timings \(emptyList) (replica 137), \(emptyListNotUncompressed.count) not read as uncompressed")
+        #expect(appleDSC == 34 && appleViolations.isEmpty, "Apple displays with a DSC-capable mode \(appleDSC) (replica 29), \(appleViolations.count) not read as DSC on with no link blame")
         #expect(appleNoDSC.count == 9 && appleNoDSC.allSatisfy { $0.contains("06102792-") || $0.contains("06102692-") }, "Apple displays without a DSC-capable mode \(appleNoDSC.count) (replica 9, every one a Thunderbolt or Cinema Display): \(appleNoDSC)")
         #expect(ruleMarked == 8 && ruleMarkedListWrong.isEmpty, "rule-marked timings \(ruleMarked) (replica 8), \(ruleMarkedListWrong.count) whose list is not the DSC-capable set")
         #expect(ruleMarkedAllListed == 5 && ruleMarkedMixed.count == 3 && ruleMarkedVerdictWrong.isEmpty, "rule-marked: every mode listed \(ruleMarkedAllListed) (replica 5), mixed \(ruleMarkedMixed.count) (replica 3), wrong verdicts \(ruleMarkedVerdictWrong.count)")
-        #expect(noLink == 1, "non-Apple tested timings with no readable link \(noLink); the replica measured 1")
+        #expect(noLink == 2, "non-Apple tested timings with no readable link \(noLink); the replica measured 1")
         #expect(paired == sampledSkipped.count + incomplete.count + tested, "every attached node is a sampled skip, named incomplete, or tested: \(paired) against \(sampledSkipped.count) + \(incomplete.count) + \(tested)")
         // PR #665 gate, Codex 2: the shapes the fail-closed rule catches (an ID no colour mode
         // carries in either list, a SupportsDSC outside the two-bit field) occur on none of the
@@ -1384,8 +1384,8 @@ struct DisplayDiagnosticProbeSweepTests {
         for line in adapterWording + missing { print("  NATIVE HDMI RECEIPT MISSING \(line)") }
         // The reviewer's census at 99423fd9 (rerun report, note 4): 38 native-HDMI nodes, 23 with
         // members, K15 on 0. Measured by this sweep on 2026-09-21: 38, 23; K39 + K40 == 23.
-        #expect(nativeHDMI == 38, "native-HDMI attached nodes \(nativeHDMI); the reviewer measured 38")
-        #expect(withMembers == 23, "native-HDMI nodes with unsafe members \(withMembers); the reviewer measured 23")
+        #expect(nativeHDMI == 45, "native-HDMI attached nodes \(nativeHDMI); 38 at 1408 folders, 45 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
+        #expect(withMembers == 24, "native-HDMI nodes with unsafe members \(withMembers); 23 at 1408 folders, 24 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
         #expect(k39.count + k40.count == withMembers, "K39 \(k39.count) + K40 \(k40.count) against \(withMembers) nodes with members")
         #expect(adapterWording.isEmpty && missing.isEmpty, "adapter wording on a native port: \(adapterWording.count); members with no receipt: \(missing.count)")
     }
@@ -1525,15 +1525,19 @@ struct DisplayDiagnosticProbeSweepTests {
         // Measured by this sweep on 2026-09-21 over 1415 folders (the print lines above, verbatim):
         //   DisplayDiagnosticProbeSweep/#664 top mode population: 1415 folders, 260 captured driven timings, 231 eligible (15 with no active block carrying the key, 14 with several, 0 unkeyable nodes), attached 231, failures 0, known exceptions 0
         //   DisplayDiagnosticProbeSweep/#664 top mode: 12 of 231 attached nodes driven below the top (0 with no diagnostic); SKIP sampled driven lists 3, reading not uncompressed 0; offered 3, not offered 6, not listed 0; mismatches 0
-        #expect(corpus.eligible == 231, "eligible population \(corpus.eligible), replica 231: \(corpus.summary)")
+        #expect(corpus.eligible == 260, "eligible population \(corpus.eligible), 231 at 1408 folders, 260 at 1524. Re-derived 2026-09-22 (the 2026-09-22 ingest added 116 machines); failures stayed 0. \(corpus.summary)")
         #expect(corpus.unnamedFailures.isEmpty, "eligible nodes production match did not attach and knownExceptions does not name:\n\(corpus.unnamedFailures.map(\.description).joined(separator: "\n"))")
         #expect(corpus.attached.count == corpus.eligible - CorpusDisplayProbes.knownExceptions.count)
         #expect(noDiagnostic.isEmpty, "attached nodes with no diagnostic or no top mode:\n\(noDiagnostic.joined(separator: "\n"))")
         let classified = offered.count + notOffered.count + notListed.count
-        #expect(belowTop == 13, "below the top \(belowTop); the replica measured 12, plus the G85SB since fix round 4 (13)")
-        #expect(skippedSampledDriven.count == 4 && skippedReading.isEmpty, "skips: sampled \(skippedSampledDriven.count) (replica 3, plus the G85SB since fix round 4: 4), reading \(skippedReading.count) (replica 0)")
+        #expect(belowTop == 20, "below the top \(belowTop); 13 at 1408 folders, 20 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); mismatches stayed 0.")
+        // skippedReading's single member is named below, mirroring the G85SB
+        // assertion for its sibling: a bare ceiling lets a different node take
+        // the slot without anyone noticing.
+        #expect(skippedSampledDriven.count == 6 && skippedReading.count == 1, "skips: sampled \(skippedSampledDriven.count) (4 at 1408 folders, 6 at 1524), reading \(skippedReading.count) (0 at 1408, 1 at 1524). Re-derived 2026-09-22 (the 2026-09-22 ingest added 116 machines); mismatches stayed 0.")
         #expect(skippedSampledDriven.contains { $0.hasPrefix("m1pro_macos26.5.2_x block 1") && $0.contains("notListed") }, "the G85SB is the fourth sampled skip, not listed:\n\(skippedSampledDriven.joined(separator: "\n"))")
-        #expect(classified == 9 && offered.count == 3 && notOffered.count == 6, "classified \(classified) (replica 9): offered \(offered.count) (3), not offered \(notOffered.count) (6)")
+        #expect(skippedReading.contains { $0.hasPrefix("m1max_macos26.6.2_i") }, "the one reading skip is m1max_macos26.6.2_i, which arrived with the 2026-09-22 ingest:\n\(skippedReading.joined(separator: "\n"))")
+        #expect(classified == 13 && offered.count == 4 && notOffered.count == 9, "classified \(classified): 9 (offered 3, not offered 6) at 1408 folders, 13 (4, 9) at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
         #expect(notListed.isEmpty, "\(notListed.count) classified below-top nodes whose resolved top the node never lists; since fix round 4 the rule can leave one, and the corpus's one (the G85SB) is a sampled skip, not a classified verdict:\n\(notListed.joined(separator: "\n"))")
         #expect(mismatches.isEmpty, "\(mismatches.count) below-top nodes whose verdict does not follow the top-mode timing:\n\(mismatches.joined(separator: "\n"))")
         #expect(classified + skippedSampledDriven.count + skippedReading.count == belowTop, "every below-top node is classified or named as skipped")
