@@ -17,10 +17,24 @@
 //   --refresh-certs   refetch every USB-IF per-XID record instead of reusing
 //                     the .cert-cache (picks up cables that changed, e.g.
 //                     Pass -> Obsolete, or gained listings).
-//   --test-parser     run the manual-vendors parser self-tests and exit.
+//   --test-parser     run the parser self-tests (manual vendors, contact-email
+//                     stripping, known cables, cert-xids.tsv, the seeded
+//                     cert-date fallback and per-XID response validation)
+//                     and exit.
 // Env:
 //   ALLOW_EMPTY_CERTS=1   permit a build with zero certifications (otherwise a
 //                         collapsed cert table fails the build; see below).
+//                         Also overrides a failed per-XID certification fetch
+//                         (exit 6): with this set, a failed fetch is a
+//                         warning, not a build failure.
+//   WC_FAIL_CERT_FETCH    test hook: comma-separated XIDs, decimal or hex
+//                         with a 0x prefix (e.g. 7238 or 0x1C46). Forces
+//                         fetchPerXIDListings to fail (return nil) for those
+//                         XIDs, before it checks the cache, no network
+//                         involved. Lets the exit(6) failed-build path be
+//                         exercised in a real build. Does nothing when unset
+//                         or empty. A token it cannot parse is reported on
+//                         stderr and ignored; empty tokens are ignored.
 //
 // Requires: macOS (uses system SQLite3 via libsqlite3).
 
@@ -32,6 +46,7 @@ import SQLite3
 let repoRoot = FileManager.default.currentDirectoryPath
 let vendorTSV = "\(repoRoot)/Sources/WhatCableCore/Resources/usbif-vendors.tsv"
 let manualVendorTSV = "\(repoRoot)/data/manual-vendors.tsv"
+let certXIDsTSV = "\(repoRoot)/data/cert-xids.tsv"
 let dbOutput = "\(repoRoot)/Sources/WhatCableCore/Resources/whatcable.db"
 let dbWebCopy = "\(repoRoot)/docs/whatcable.db"
 let cablesJSON = "\(repoRoot)/docs/cables.json"
@@ -54,6 +69,35 @@ let certCacheDir = "\(repoRoot)/.cert-cache"
 // is picked up. Without it, cached responses (including cached empties) are
 // reused indefinitely. A successful refetch overwrites its cache entry.
 let refreshCerts = CommandLine.arguments.contains("--refresh-certs")
+
+// Test hook (see WC_FAIL_CERT_FETCH in the header comment): forces
+// fetchPerXIDListings to fail for these XIDs, so the exit(6) failed-build
+// path can be watched firing in a real build without a network fetch and
+// without waiting for a cold per-XID crawl. Empty when unset, which does
+// nothing.
+// Tokens may be decimal or 0x-prefixed hex, because XIDs are written in hex
+// everywhere else and a silently dropped `0x1C46` would make the guard look
+// broken. A token that parses as neither gets a stderr warning.
+let forcedCertFetchFailures: Set<Int> = {
+    var out: Set<Int> = []
+    let raw = ProcessInfo.processInfo.environment["WC_FAIL_CERT_FETCH"] ?? ""
+    for piece in raw.split(separator: ",") {
+        let token = piece.trimmingCharacters(in: .whitespaces)
+        if token.isEmpty { continue }
+        let value: Int?
+        if token.hasPrefix("0x") || token.hasPrefix("0X") {
+            value = Int(token.dropFirst(2), radix: 16)
+        } else {
+            value = Int(token)
+        }
+        if let value {
+            out.insert(value)
+        } else {
+            fputs("warn: WC_FAIL_CERT_FETCH: cannot parse XID token '\(token)', ignoring it\n", stderr)
+        }
+    }
+    return out
+}()
 
 // MARK: - SQLite helpers
 
@@ -416,6 +460,108 @@ func importManualVendors() -> (inserted: Int, skipped: Int) {
     runSQL("COMMIT")
     sqlite3_finalize(stmt)
     return (inserted, skipped)
+}
+
+// MARK: - Manual certification-ID seed (data/cert-xids.tsv)
+
+struct ManualCertXID: Equatable {
+    let xid: Int
+    /// Certification date for this XID, in the same format the cable_certs
+    /// column holds ("2019-01-25T00:00:00"), or "" when USB-IF never
+    /// published one. Seeded here because the per-XID endpoint does not
+    /// return a date and these XIDs are no longer in the bulk catalogue.
+    let certDate: String
+    let note: String
+}
+
+/// Pure parser for cert-xids.tsv. Returns parsed entries plus any warnings
+/// the build script should print. Side-effect free so `--test-parser` can
+/// exercise it directly.
+///
+/// Validation rules, deliberately the same shape as the manual-vendors
+/// parser:
+/// - Comment lines (starting with `#`) and blank lines are ignored.
+/// - Each data line must have exactly 3 tab-separated fields:
+///   XID, certification date, note.
+/// - XID must be hex (with or without `0x`/`0X` prefix) and non-zero. Zero
+///   is the "no certification" sentinel, never a real ID.
+/// - The certification date may be empty: USB-IF genuinely publishes no date
+///   for some listings, and an invented one would be worse than none.
+/// - The note must be non-empty; it is for humans and the build ignores it.
+/// - Duplicate XIDs are warned and skipped (first occurrence wins).
+func parseCertXIDsText(_ text: String) -> (entries: [ManualCertXID], warnings: [String]) {
+    var entries: [ManualCertXID] = []
+    var warnings: [String] = []
+    var seen: Set<Int> = []
+
+    for (zeroBasedIndex, rawLine) in text.components(separatedBy: "\n").enumerated() {
+        let lineNum = zeroBasedIndex + 1
+        let line = rawLine.trimmingCharacters(in: CharacterSet(charactersIn: "\r\n"))
+        let visible = line.trimmingCharacters(in: .whitespaces)
+        if visible.isEmpty || visible.hasPrefix("#") { continue }
+
+        let parts = line.components(separatedBy: "\t")
+        guard parts.count == 3 else {
+            warnings.append("cert-xids.tsv line \(lineNum): expected exactly 3 tab-separated fields, got \(parts.count); skipping")
+            continue
+        }
+
+        let xidToken = parts[0].trimmingCharacters(in: .whitespaces)
+        let certDate = parts[1].trimmingCharacters(in: .whitespaces)
+        let note = parts[2].trimmingCharacters(in: .whitespaces)
+        guard !note.isEmpty else {
+            warnings.append("cert-xids.tsv line \(lineNum): empty note; skipping")
+            continue
+        }
+
+        let hexPart: String
+        if xidToken.hasPrefix("0x") || xidToken.hasPrefix("0X") {
+            hexPart = String(xidToken.dropFirst(2))
+        } else {
+            hexPart = xidToken
+        }
+        guard !hexPart.isEmpty, let xid = Int(hexPart, radix: 16) else {
+            warnings.append("cert-xids.tsv line \(lineNum): cannot parse XID '\(xidToken)' as hex; skipping")
+            continue
+        }
+        guard xid > 0, xid <= 0xFFFF_FFFF else {
+            warnings.append("cert-xids.tsv line \(lineNum): XID '\(xidToken)' out of range (1...0xFFFFFFFF); skipping")
+            continue
+        }
+        guard !seen.contains(xid) else {
+            warnings.append("cert-xids.tsv line \(lineNum): duplicate XID '\(xidToken)'; skipping")
+            continue
+        }
+        seen.insert(xid)
+        entries.append(ManualCertXID(xid: xid, certDate: certDate, note: note))
+    }
+
+    return (entries, warnings)
+}
+
+/// Certification IDs named in data/cert-xids.tsv, each with its seeded
+/// certification date ("" when USB-IF publishes none).
+///
+/// Third seed alongside `curatedXIDs()` and `corpusXIDs()`, for IDs none of
+/// the automated sources lists today.
+///
+/// A missing file is not an error: the seed list is optional and an absent
+/// one just means no extra IDs. A file that EXISTS but cannot be read is a
+/// different thing entirely, and silently returning an empty set there would
+/// reproduce the very bug this file was added to stop (one stray non-UTF-8
+/// byte is enough). Same shape as `importKnownCables()`: warn loudly to
+/// stderr, then carry on.
+func manualCertXIDs(path: String = certXIDsTSV) -> [Int: String] {
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+        if FileManager.default.fileExists(atPath: path) {
+            fputs("warn: \(path) exists but could not be read as UTF-8; " +
+                  "no seeded certification IDs this build\n", stderr)
+        }
+        return [:]
+    }
+    let (entries, warnings) = parseCertXIDsText(text)
+    for warning in warnings { fputs("warn: \(warning)\n", stderr) }
+    return Dictionary(uniqueKeysWithValues: entries.map { ($0.xid, $0.certDate) })
 }
 
 // MARK: - Self-test mode (--test-parser)
@@ -961,16 +1107,176 @@ func runKnownCablesParserSelfTests() -> (failures: Int, output: String) {
     return (failures, output)
 }
 
+func runCertXIDParserSelfTests() -> (failures: Int, output: String) {
+    struct Case {
+        let label: String
+        let input: String
+        let expectedEntries: [ManualCertXID]
+        let expectedWarningSubstrings: [String]
+    }
+
+    let cases: [Case] = [
+        Case(
+            label: "happy path: 0x prefix, no prefix, mixed case",
+            input: "0x3399\t2021-03-04T00:00:00\tStarTech.com Ltd.: CC3M20GUSB4CX\n"
+                + "17bc\t2019-08-26T00:00:00\tON Semiconductor: FUSB380C\n"
+                + "0X241205\t2024-02-08T00:00:00\tLuxshare-ICT: sample\n",
+            expectedEntries: [
+                ManualCertXID(xid: 0x3399, certDate: "2021-03-04T00:00:00",
+                              note: "StarTech.com Ltd.: CC3M20GUSB4CX"),
+                ManualCertXID(xid: 0x17BC, certDate: "2019-08-26T00:00:00",
+                              note: "ON Semiconductor: FUSB380C"),
+                ManualCertXID(xid: 0x241205, certDate: "2024-02-08T00:00:00",
+                              note: "Luxshare-ICT: sample"),
+            ],
+            expectedWarningSubstrings: []
+        ),
+        Case(
+            label: "comments and blank lines are ignored",
+            input: "# header\n\n# another\n0x3399\t2021-03-04T00:00:00\tStarTech.com Ltd.\n\n",
+            expectedEntries: [
+                ManualCertXID(xid: 0x3399, certDate: "2021-03-04T00:00:00",
+                              note: "StarTech.com Ltd."),
+            ],
+            expectedWarningSubstrings: []
+        ),
+        Case(
+            label: "an empty date field is valid; USB-IF publishes none for some IDs",
+            input: "0x1C53\t\tStarTech.com Ltd.: 50C-40G-USB4-CABLE\n",
+            expectedEntries: [
+                ManualCertXID(xid: 0x1C53, certDate: "",
+                              note: "StarTech.com Ltd.: 50C-40G-USB4-CABLE"),
+            ],
+            expectedWarningSubstrings: []
+        ),
+        Case(
+            label: "XID 0 is the no-certification sentinel and is rejected",
+            input: "0x0\t2021-03-04T00:00:00\tnot a real listing\n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["out of range"]
+        ),
+        Case(
+            label: "XID above 32 bits is rejected (upper bound)",
+            input: "0x100000000\t2021-03-04T00:00:00\tone bit past the top\n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["out of range"]
+        ),
+        Case(
+            label: "unparseable XID is warned and skipped",
+            input: "notahex\t2021-03-04T00:00:00\tsomething\n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["cannot parse XID"]
+        ),
+        Case(
+            label: "too few fields is warned and skipped",
+            input: "0x3399\n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["expected exactly 3 tab-separated fields"]
+        ),
+        Case(
+            label: "the old 2-field shape is warned and skipped, not read as a dateless entry",
+            input: "0x3399\tStarTech.com Ltd.: CC3M20GUSB4CX\n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["expected exactly 3 tab-separated fields"]
+        ),
+        Case(
+            label: "too many fields is warned and skipped",
+            input: "0x3399\t2021-03-04T00:00:00\tStarTech.com Ltd.\tstray fourth field\n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["expected exactly 3 tab-separated fields"]
+        ),
+        Case(
+            label: "empty note is warned and skipped",
+            input: "0x3399\t2021-03-04T00:00:00\t   \n",
+            expectedEntries: [],
+            expectedWarningSubstrings: ["empty note"]
+        ),
+        Case(
+            label: "duplicate XID keeps the first and warns",
+            input: "0x3399\t2021-03-04T00:00:00\tfirst\n0x3399\t2022-01-01T00:00:00\tsecond\n",
+            expectedEntries: [
+                ManualCertXID(xid: 0x3399, certDate: "2021-03-04T00:00:00", note: "first"),
+            ],
+            expectedWarningSubstrings: ["duplicate XID"]
+        ),
+        // The case the rest of this suite cannot make: a rejected line must
+        // SKIP, not stop the parse. Every reject path is sandwiched between
+        // two good lines, and both good lines are expected out the far side.
+        // Turning any one `continue` in this parser into a `break` loses the
+        // good lines below it, which is exactly the shape of the 2026-09-22
+        // incident: the file is read, no error is raised, and most of the
+        // seeded IDs quietly never reach the build.
+        Case(
+            label: "a rejected line is skipped, not fatal: good lines after every reject kind survive",
+            input: "0x1111\t2020-01-01T00:00:00\tfirst good\n"
+                + "0x2222\t2020-01-01T00:00:00\ttoo many\tfields\n"
+                + "0x3333\t2020-01-01T00:00:00\t   \n"
+                + "notahex\t2020-01-01T00:00:00\tbad xid\n"
+                + "0x100000000\t2020-01-01T00:00:00\tout of range\n"
+                + "0x1111\t2020-01-01T00:00:00\tduplicate of the first\n"
+                + "0x9999\n"
+                + "0x4444\t\tlast good, dateless\n",
+            expectedEntries: [
+                ManualCertXID(xid: 0x1111, certDate: "2020-01-01T00:00:00", note: "first good"),
+                ManualCertXID(xid: 0x4444, certDate: "", note: "last good, dateless"),
+            ],
+            expectedWarningSubstrings: [
+                "expected exactly 3 tab-separated fields",
+                "empty note",
+                "cannot parse XID",
+                "out of range",
+                "duplicate XID",
+            ]
+        ),
+    ]
+
+    var failures = 0
+    var output = "cert-xids parser:\n"
+    for testCase in cases {
+        let (entries, warnings) = parseCertXIDsText(testCase.input)
+        var problems: [String] = []
+        if entries != testCase.expectedEntries {
+            problems.append("entries \(entries) != expected \(testCase.expectedEntries)")
+        }
+        for expected in testCase.expectedWarningSubstrings
+        where !warnings.contains(where: { $0.contains(expected) }) {
+            problems.append("missing warning containing '\(expected)' (got \(warnings))")
+        }
+        if testCase.expectedWarningSubstrings.isEmpty && !warnings.isEmpty {
+            problems.append("unexpected warnings \(warnings)")
+        }
+        if problems.isEmpty {
+            output += "  ok: \(testCase.label)\n"
+        } else {
+            failures += 1
+            output += "  FAIL: \(testCase.label)\n"
+            for problem in problems { output += "    - \(problem)\n" }
+        }
+    }
+    output += "\n\(failures == 0 ? "all passed" : "\(failures) FAILED")\n"
+    return (failures, output)
+}
+
 if CommandLine.arguments.contains("--test-parser") {
     let (vendorFailures, vendorReport) = runManualVendorParserSelfTests()
     let (emailFailures, emailReport) = runContactEmailSelfTests()
     let (cableFailures, cableReport) = runKnownCablesParserSelfTests()
+    let (certXIDFailures, certXIDReport) = runCertXIDParserSelfTests()
+    let (certDateFailures, certDateReport) = runCertDateFallbackSelfTests()
+    let (perXIDFailures, perXIDReport) = runPerXIDResponseSelfTests()
     FileHandle.standardOutput.write(vendorReport.data(using: .utf8) ?? Data())
     FileHandle.standardOutput.write("\ncontact-email stripping:\n".data(using: .utf8) ?? Data())
     FileHandle.standardOutput.write(emailReport.data(using: .utf8) ?? Data())
     FileHandle.standardOutput.write("\n".data(using: .utf8) ?? Data())
     FileHandle.standardOutput.write(cableReport.data(using: .utf8) ?? Data())
-    exit((vendorFailures + emailFailures + cableFailures) == 0 ? 0 : 1)
+    FileHandle.standardOutput.write("\n".data(using: .utf8) ?? Data())
+    FileHandle.standardOutput.write(certXIDReport.data(using: .utf8) ?? Data())
+    FileHandle.standardOutput.write("\n".data(using: .utf8) ?? Data())
+    FileHandle.standardOutput.write(certDateReport.data(using: .utf8) ?? Data())
+    FileHandle.standardOutput.write("\n".data(using: .utf8) ?? Data())
+    FileHandle.standardOutput.write(perXIDReport.data(using: .utf8) ?? Data())
+    exit((vendorFailures + emailFailures + cableFailures
+          + certXIDFailures + certDateFailures + perXIDFailures) == 0 ? 0 : 1)
 }
 
 func importKnownCables() -> Int {
@@ -1237,6 +1543,103 @@ struct BulkListing {
     let certDate: String
 }
 
+/// Best certification date for one listing.
+///
+/// Matched conservatively against the bulk rows for this XID: prefer an exact
+/// company+model match, otherwise fall back to a company-only match ONLY when
+/// exactly one bulk row carries that company. If several models share the
+/// company we cannot tell which date belongs to this listing, so return empty
+/// rather than guess (an XID with several unrelated companies must never
+/// borrow another's date).
+///
+/// When the bulk catalogue has NO rows for this XID at all, fall back to the
+/// date seeded in data/cert-xids.tsv. That is the whole point of the seed: the
+/// per-XID endpoint answers for IDs the bulk feed has dropped, but it returns
+/// no date, so without this the restored listings come back dateless.
+///
+/// The seed is a fallback, never an override. An XID the bulk catalogue does
+/// list takes its date from there, even when that resolves to "" because the
+/// company/model match was too weak to trust, and an XID outside the seed file
+/// gets nothing from it.
+///
+/// Pure (no globals, no I/O) so `--test-parser` can exercise it directly.
+func certDate(
+    forXID xid: Int,
+    company: String,
+    model: String,
+    bulk: [Int: [BulkListing]],
+    seededDates: [Int: String]
+) -> String {
+    guard let rows = bulk[xid], !rows.isEmpty else {
+        return seededDates[xid] ?? ""
+    }
+    if let exact = rows.first(where: {
+        $0.company.caseInsensitiveCompare(company) == .orderedSame
+            && $0.model.caseInsensitiveCompare(model) == .orderedSame
+    }) { return exact.certDate }
+    let sameCompany = rows.filter {
+        $0.company.caseInsensitiveCompare(company) == .orderedSame
+    }
+    return sameCompany.count == 1 ? sameCompany[0].certDate : ""
+}
+
+/// Self-tests for the seeded-date fallback in `certDate(forXID:...)`.
+///
+/// The rule under test is narrow and easy to get wrong in either direction:
+/// the seed fills a date in ONLY when the bulk catalogue has nothing at all
+/// for that XID, it never overrides a bulk date, and it never reaches an XID
+/// outside data/cert-xids.tsv.
+func runCertDateFallbackSelfTests() -> (failures: Int, output: String) {
+    // 0x1C46 and 0x1C53 are seeded and absent from bulk (the real case).
+    // 0x219C and 0x2600 are seeded AND in bulk, purely to prove the seed
+    // never overrides the catalogue.
+    let seeded: [Int: String] = [
+        0x1C46: "2017-11-28T00:00:00",   // StarTech, dropped from the bulk feed
+        0x1C53: "",                      // seeded but genuinely dateless
+        0x219C: "1999-09-09T00:00:00",   // deliberately wrong; bulk must win
+        0x2600: "1999-09-09T00:00:00",   // deliberately wrong; bulk must win
+    ]
+    let bulk: [Int: [BulkListing]] = [
+        0x219C: [BulkListing(company: "Anker", model: "A8756",
+                             status: "Pass", certDate: "2022-06-01T00:00:00")],
+        0x2600: [
+            BulkListing(company: "Foo Ltd", model: "A", status: "Pass",
+                        certDate: "2020-01-01T00:00:00"),
+            BulkListing(company: "Bar Ltd", model: "B", status: "Pass",
+                        certDate: "2021-01-01T00:00:00"),
+        ],
+    ]
+
+    let cases: [(label: String, xid: Int, company: String, model: String, expected: String)] = [
+        ("a seeded XID the bulk feed has dropped takes the seeded date",
+         0x1C46, "StarTech.com Ltd.", "USB31CC1M", "2017-11-28T00:00:00"),
+        ("a seeded XID with an empty seeded date stays empty",
+         0x1C53, "StarTech.com Ltd.", "50C-40G-USB4-CABLE", ""),
+        ("the seed never overrides a date the bulk catalogue does supply",
+         0x219C, "Anker", "A8756", "2022-06-01T00:00:00"),
+        ("bulk rows present but no company match: still empty, seed does not fill in",
+         0x2600, "Baz Ltd", "C", ""),
+        ("an XID outside the seed file gets nothing from it",
+         0x4242, "Nobody Ltd", "X", ""),
+    ]
+
+    var failures = 0
+    var output = "cert-date seed fallback:\n"
+    for testCase in cases {
+        let got = certDate(forXID: testCase.xid, company: testCase.company,
+                           model: testCase.model, bulk: bulk, seededDates: seeded)
+        if got == testCase.expected {
+            output += "  ok: \(testCase.label)\n"
+        } else {
+            failures += 1
+            output += "  FAIL: \(testCase.label)\n"
+            output += "    - expected '\(testCase.expected)', got '\(got)'\n"
+        }
+    }
+    output += "\n\(failures == 0 ? "all passed" : "\(failures) FAILED")\n"
+    return (failures, output)
+}
+
 /// Fetch the bulk catalogue and index the XID-bearing rows by XID.
 /// Returns nil on fetch/parse failure so the caller can skip cert import
 /// without aborting the whole DB build.
@@ -1280,17 +1683,96 @@ func fetchBulkListings() -> [Int: [BulkListing]]? {
     return byXID
 }
 
+/// Whether a parsed per-XID response can be trusted. Usable only if it is a
+/// JSON array and EVERY row is an object with a non-empty (trimmed) string
+/// `company`. An empty array is usable: it is the endpoint's "not
+/// registered" answer.
+///
+/// All-or-nothing on purpose. A row without a company is what a schema change
+/// at USB-IF looks like (e.g. `company` renamed), and the importer would skip
+/// such rows as malformed. Accepting the response anyway would drop those
+/// listings with the build still exiting 0, and caching it would repeat the
+/// loss on every later build. Measured 2026-09-23: none of the 931 non-empty
+/// cached responses has a row without a company, so this rejects nothing real.
+///
+/// Pure (no globals, no I/O) so `--test-parser` can exercise it directly.
+func isUsablePerXIDResponse(_ json: Any) -> Bool {
+    guard let rows = json as? [Any] else { return false }
+    for row in rows {
+        guard let object = row as? [String: Any],
+              let company = object["company"] as? String,
+              !company.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+    }
+    return true
+}
+
+/// Self-tests for `isUsablePerXIDResponse`. The cases that matter most are
+/// the mixed ones: a single bad row anywhere must make the whole response
+/// unusable, not just the first row.
+func runPerXIDResponseSelfTests() -> (failures: Int, output: String) {
+    let good: [String: Any] = ["company": "StarTech.com Ltd.", "model_number": "USB31CC1M"]
+    let good2: [String: Any] = ["company": "Johnson Component", "model_number": "X"]
+    let cases: [(label: String, json: Any, expected: Bool)] = [
+        ("an empty array is a usable 'not registered' answer", [Any](), true),
+        ("one row with a company is usable", [good], true),
+        ("several rows with companies are usable", [good, good2, good], true),
+        ("a row with no company key is unusable",
+         [["company_name": "StarTech.com Ltd."] as [String: Any]], false),
+        ("a row with an empty company is unusable",
+         [["company": ""] as [String: Any]], false),
+        ("a row with a whitespace-only company is unusable",
+         [["company": "  \t "] as [String: Any]], false),
+        ("a row with a non-string company is unusable",
+         [["company": 42] as [String: Any]], false),
+        ("a good row then a bad row is unusable (every row is checked)",
+         [good, ["company": ""] as [String: Any]], false),
+        ("a bad row then a good row is unusable",
+         [["model_number": "X"] as [String: Any], good], false),
+        ("a JSON object is not an array, so unusable",
+         ["company": "StarTech.com Ltd."] as [String: Any], false),
+        ("a string is not an array, so unusable", "error", false),
+        ("an array holding a non-object is unusable", [good, "oops"] as [Any], false),
+    ]
+
+    var failures = 0
+    var output = "per-XID response validation:\n"
+    for testCase in cases {
+        let got = isUsablePerXIDResponse(testCase.json)
+        if got == testCase.expected {
+            output += "  ok: \(testCase.label)\n"
+        } else {
+            failures += 1
+            output += "  FAIL: \(testCase.label)\n"
+            output += "    - expected \(testCase.expected), got \(got)\n"
+        }
+    }
+    output += "\n\(failures == 0 ? "all passed" : "\(failures) FAILED")\n"
+    return (failures, output)
+}
+
 /// Fetch one XID's listings from the per-XID endpoint, caching the raw
 /// response to disk. An empty array is a valid "not registered" result and
 /// is cached too, so it is not re-fetched. Returns the parsed array (possibly
-/// empty), or nil only when the network fetch itself failed.
+/// empty), or nil when the fetch failed or the response failed
+/// `isUsablePerXIDResponse`.
+///
+/// Validation runs on the cache too. A cached response that fails it (written
+/// by an older build that cached before validating, or damaged on disk) is
+/// treated as a cache miss and refetched, so a poisoned entry cannot keep
+/// losing listings. A fresh response that fails it is never cached.
 func fetchPerXIDListings(_ xid: Int) -> [[String: Any]]? {
+    if forcedCertFetchFailures.contains(xid) { return nil }
     let cachePath = "\(certCacheDir)/\(xid).json"
     let fm = FileManager.default
-    if !refreshCerts,
-       let cached = fm.contents(atPath: cachePath),
-       let arr = (try? JSONSerialization.jsonObject(with: cached)) as? [[String: Any]] {
-        return arr
+    if !refreshCerts, let cached = fm.contents(atPath: cachePath) {
+        if let json = try? JSONSerialization.jsonObject(with: cached),
+           isUsablePerXIDResponse(json),
+           let arr = json as? [[String: Any]] {
+            return arr
+        }
+        fputs("warn: cached per-XID response for \(String(format: "0x%X", xid)) " +
+              "is malformed; ignoring the cache and refetching\n", stderr)
     }
     // Be polite to USB-IF's undocumented per-XID endpoint: throttle to ~2
     // requests a second, but only on an actual network fetch (a warm cache
@@ -1298,9 +1780,15 @@ func fetchPerXIDListings(_ xid: Int) -> [[String: Any]]? {
     // describes for the one-time full fetch.
     Thread.sleep(forTimeInterval: 0.5)
     guard let data = httpGet(usbifPerXIDURL(xid)) else { return nil }
-    // Validate it parses as an array before caching; a non-array response
-    // is a transient error, not a "not registered" answer.
-    guard let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+    // Validate before caching. A non-array response is a transient error,
+    // not a "not registered" answer, and an array with a company-less row
+    // is a malformed or schema-changed one. Either is a failed fetch, and
+    // neither is written to the cache.
+    guard let json = try? JSONSerialization.jsonObject(with: data),
+          isUsablePerXIDResponse(json),
+          let arr = json as? [[String: Any]] else {
+        fputs("warn: per-XID response for \(String(format: "0x%X", xid)) " +
+              "is malformed; treating it as a failed fetch, not caching it\n", stderr)
         return nil
     }
     try? data.write(to: URL(fileURLWithPath: cachePath))
@@ -1410,13 +1898,13 @@ func blockCertStatXID(_ block: String) -> Int? {
     return value
 }
 
-func importCertifications() -> (xids: Int, listings: Int) {
+func importCertifications() -> (xids: Int, listings: Int, failedXIDs: [Int]) {
     try? FileManager.default.createDirectory(
         atPath: certCacheDir, withIntermediateDirectories: true)
 
     guard let bulk = fetchBulkListings() else {
         fputs("warn: skipping certification import (bulk fetch failed)\n", stderr)
-        return (0, 0)
+        return (0, 0, [])
     }
 
     // Universe = every XID the catalogue lists, plus every XID our curated
@@ -1424,10 +1912,11 @@ func importCertifications() -> (xids: Int, listings: Int) {
     // Sorted so progress logging and cache order are stable.
     let curated = curatedXIDs()
     let corpus = corpusXIDs()
-    let universe = Set(bulk.keys).union(curated).union(corpus).sorted()
+    let seeded = manualCertXIDs()
+    let universe = Set(bulk.keys).union(curated).union(corpus).union(seeded.keys).sorted()
     print("USB-IF certs: \(universe.count) XIDs to resolve " +
           "(\(bulk.count) from bulk list, \(curated.count) from curated cables, " +
-          "\(corpus.count) from the probe corpus)")
+          "\(corpus.count) from the probe corpus, \(seeded.count) from data/cert-xids.tsv)")
 
     let insertSQL = """
         INSERT INTO cable_certs (xid, vendor_id, company, model, status, cert_date, source)
@@ -1436,7 +1925,7 @@ func importCertifications() -> (xids: Int, listings: Int) {
     var stmt: OpaquePointer?
     guard sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nil) == SQLITE_OK else {
         fputs("warn: prepare failed for cable_certs insert\n", stderr)
-        return (0, 0)
+        return (0, 0, [])
     }
     defer { sqlite3_finalize(stmt) }
 
@@ -1448,41 +1937,28 @@ func importCertifications() -> (xids: Int, listings: Int) {
         sqlite3_bind_text(stmt, idx, value, -1, SQLITE_TRANSIENT)
     }
 
-    /// Best cert date for a listing, matched conservatively against the bulk
-    /// rows for this XID. Prefer an exact company+model match. Otherwise fall
-    /// back to a company-only match ONLY when exactly one bulk row has that
-    /// company; if several models share the company, we cannot tell which
-    /// date belongs to this listing, so return empty rather than guess (an
-    /// XID with several unrelated companies must never borrow another's date).
-    func certDate(forXID xid: Int, company: String, model: String) -> String {
-        let rows = bulk[xid] ?? []
-        if let exact = rows.first(where: {
-            $0.company.caseInsensitiveCompare(company) == .orderedSame
-                && $0.model.caseInsensitiveCompare(model) == .orderedSame
-        }) { return exact.certDate }
-        let sameCompany = rows.filter {
-            $0.company.caseInsensitiveCompare(company) == .orderedSame
-        }
-        return sameCompany.count == 1 ? sameCompany[0].certDate : ""
-    }
-
     var xidsCovered = 0
     var listingsInserted = 0
     var fetchFailures = 0
+    var failedXIDs: [Int] = []
 
     for (i, xid) in universe.enumerated() {
         if i > 0 && i % 100 == 0 {
             print("  ...\(i)/\(universe.count) XIDs resolved")
         }
         let perXID = fetchPerXIDListings(xid)
-        if perXID == nil { fetchFailures += 1 }
+        if perXID == nil {
+            fetchFailures += 1
+            failedXIDs.append(xid)
+        }
 
-        // Authoritative first: per-XID rows carry vendor_id. A row is only
-        // usable if it has a non-empty company (an empty company would render
-        // as a bogus "USB-IF certified. Manufacturer:" line, and signals a
-        // garbage / schema-changed response). If a per-XID response yields no
-        // usable row, we fall THROUGH to the bulk data via the single
-        // if/else chain below, rather than trusting a malformed response.
+        // Authoritative first: per-XID rows carry vendor_id. fetchPerXIDListings
+        // only returns responses where every row has a non-empty company (an
+        // empty company would render as a bogus "USB-IF certified.
+        // Manufacturer:" line); anything else comes back nil and is recorded
+        // in failedXIDs above. The company guard below is kept as defence in
+        // depth. An empty (not registered) response falls THROUGH to the bulk
+        // data via the single if/else chain below.
         var insertedFromPerXID = false
         if let listings = perXID {
             for row in listings {
@@ -1503,7 +1979,8 @@ func importCertifications() -> (xids: Int, listings: Int) {
                 bindText(3, company)
                 bindText(4, model)
                 bindText(5, status)
-                bindText(6, certDate(forXID: xid, company: company, model: model))
+                bindText(6, certDate(forXID: xid, company: company, model: model,
+                                     bulk: bulk, seededDates: seeded))
                 bindText(7, "per_xid")
                 if sqlite3_step(stmt) == SQLITE_DONE {
                     listingsInserted += 1
@@ -1537,9 +2014,9 @@ func importCertifications() -> (xids: Int, listings: Int) {
     }
 
     if fetchFailures > 0 {
-        fputs("warn: \(fetchFailures) per-XID fetches failed (left uncovered)\n", stderr)
+        fputs("warn: \(fetchFailures) per-XID fetch(es) failed\n", stderr)
     }
-    return (xidsCovered, listingsInserted)
+    return (xidsCovered, listingsInserted, failedXIDs)
 }
 
 // MARK: - Main
@@ -1576,6 +2053,23 @@ print("USB-IF certs: \(certs.listings) listings across \(certs.xids) XIDs")
 // value; an unset or empty var does not count as the override.
 let allowEmptyCerts = !(ProcessInfo.processInfo.environment["ALLOW_EMPTY_CERTS"] ?? "").isEmpty
 let certsCollapsed = certs.listings == 0 && !allowEmptyCerts
+
+// Guard against a quieter version of the same loss: a failed per-XID fetch.
+// importCertifications() records every XID whose per-XID fetch returned nil
+// (a network failure, a malformed or company-less response, or the
+// WC_FAIL_CERT_FETCH hook) and the check at the end of this script fails the
+// build with exit 6 if there are any, unless ALLOW_EMPTY_CERTS is set. The
+// importer still falls back to bulk rows for such an XID, but that fallback
+// only ever inserts the rows bulk happens to carry for that XID, which is why
+// it cannot stand in for the fetch. Several XIDs are
+// shared by more than one company (e.g. 0x2642, 0x2643, 0x264C, 0x264D carry
+// both a Johnson Component row in bulk and a StarTech listing that only the
+// per-XID endpoint returns), so a failed fetch on one of those silently
+// drops the company bulk does not know about while still reporting the XID
+// as covered. A bulk row can also exist with an empty company, inserting
+// nothing. Any failed per-XID fetch is therefore treated as unresolved,
+// regardless of what bulk carries for that XID.
+let failedCertFetches = certs.failedXIDs
 
 // Speed/Power/Type consistency and exact-duplicate checks already ran inside
 // importKnownCables(), before any row was inserted (see
@@ -1698,4 +2192,23 @@ if certsCollapsed {
 
         """, stderr)
     exit(5)
+}
+
+if !failedCertFetches.isEmpty {
+    let hexList = failedCertFetches.map { String(format: "0x%X", $0) }.joined(separator: ", ")
+    if allowEmptyCerts {
+        fputs("warn: \(failedCertFetches.count) certification fetch(es) failed " +
+              "(ALLOW_EMPTY_CERTS override): \(hexList)\n", stderr)
+    } else {
+        fputs("""
+            error: \(failedCertFetches.count) certification fetch(es) failed: \(hexList).
+            Their listings may be missing or incomplete in both bundled
+            databases. Restore them and re-run when the network is healthy:
+              git checkout -- Sources/WhatCableCore/Resources/whatcable.db docs/whatcable.db
+            The per-XID cache means a re-run only refetches what failed.
+            Or set ALLOW_EMPTY_CERTS=1 to build deliberately without them.
+
+            """, stderr)
+        exit(6)
+    }
 }

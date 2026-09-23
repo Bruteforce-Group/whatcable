@@ -41,9 +41,39 @@ struct CableCertLookupTests {
 
     @Test("The database loaded a substantial cert set")
     func certSetLoaded() {
-        // ~1,090 XIDs at build time. A large floor catches a DB that shipped
-        // without the cable_certs table (which fails soft to zero).
-        #expect(CableDB.certXIDCount >= 800)
+        // 1,124 distinct XIDs in the db committed on this branch; a fresh
+        // rebuild on 2026-09-23 produced 1,129. The floor was 800, which was useless: on
+        // 2026-09-22 the USB-IF bulk feed stopped listing StarTech and ON
+        // Semiconductor, a clean rebuild dropped 87 XIDs, and the 1,042 left
+        // is still comfortably over 800, so this test stayed green through
+        // the whole incident. 1,100 fails on that loss while leaving room for
+        // ordinary registry churn before it cries wolf. Same idea as
+        // corpusCoverageIsMeaningful below: put the floor above the broken
+        // state, not just above zero.
+        #expect(CableDB.certXIDCount >= 1100)
+    }
+
+    // Two of the 87 XIDs recovered by data/cert-xids.tsv, one per affected
+    // vendor. The count floor above catches a mass loss; these catch a
+    // narrower one, e.g. the seed file being dropped, renamed, or read as
+    // empty because a single byte in it stopped being valid UTF-8. Both are
+    // absent from the USB-IF bulk catalogue and resolve only because the
+    // build seeds them, so either one going empty means the seed path broke.
+    private static let starTechSeededXID: UInt32 = 0x0000_1C46
+    private static let onSemiSeededXID: UInt32 = 0x0000_17AE
+
+    @Test("A seeded StarTech XID the bulk catalogue no longer lists still resolves")
+    func seededStarTechXIDResolves() {
+        let certs = CableDB.certifications(forXID: Self.starTechSeededXID)
+        #expect(!certs.isEmpty)
+        #expect(certs.contains { $0.company == "StarTech.com Ltd." })
+    }
+
+    @Test("A seeded ON Semiconductor XID the bulk catalogue no longer lists still resolves")
+    func seededOnSemiXIDResolves() {
+        let certs = CableDB.certifications(forXID: Self.onSemiSeededXID)
+        #expect(!certs.isEmpty)
+        #expect(certs.contains { $0.company == "ON Semiconductor" })
     }
 
     @Test("A certified cable resolves, with its listings and vendor id")
