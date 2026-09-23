@@ -168,7 +168,7 @@
     "xid" : "none"
   },
   {
-    "brand" : "UGreen Revodok 9-in-1 USB-C hub cable, Amazon France",
+    "brand" : "UGreen USB-C hub bundled cable: Revodok 9-in-1 (Amazon France) and CM818-45363 (JD.com)",
     "cableVDO" : "0x00084841",
     "issueNum" : "#126",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/126",
@@ -238,7 +238,7 @@
     "xid" : "none"
   },
   {
-    "brand" : "UGREEN L705 USB4 \/ TB4-class cable, Amazon (VID\/PID zeroed)",
+    "brand" : "UGREEN L705 USB4 \/ TB4-class cable (part 65175), Amazon (VID\/PID zeroed)",
     "cableVDO" : "0x000A2643",
     "issueNum" : "#359",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/359",
@@ -308,7 +308,7 @@
     "xid" : "none"
   },
   {
-    "brand" : "Maxonar TH33 TB4 cable, Amazon",
+    "brand" : "Maxonar TH33 TB4 cable, Amazon; also MOVE SPEED (移速), Pinduoduo",
     "cableVDO" : "0x000A4643",
     "issueNum" : "#219",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/219",
@@ -322,7 +322,7 @@
     "xid" : "none"
   },
   {
-    "brand" : "Unbranded TB5-class 80 Gbps, zeroed e-marker",
+    "brand" : "Unbranded TB5-class 80 Gbps, zeroed e-marker (one reported as a Kickstarter cable)",
     "cableVDO" : "0x000A4644",
     "issueNum" : "#309",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/309",
@@ -330,6 +330,20 @@
     "power" : "5 A \/ 50 V (240 W)",
     "registered" : false,
     "speed" : "USB4 Gen 4 (80 Gbps, Thunderbolt 5 class)",
+    "type" : "passive",
+    "vendor" : "(zeroed)",
+    "vid" : "0x0000",
+    "xid" : "none"
+  },
+  {
+    "brand" : "Unbranded Amazon cable marked 20 Gbps (claims EPR, 20 V max VBUS)",
+    "cableVDO" : "0x000A6042",
+    "issueNum" : "#601",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/601",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : false,
+    "speed" : "USB 3.2 Gen 2 (10 Gbps)",
     "type" : "passive",
     "vendor" : "(zeroed)",
     "vid" : "0x0000",
@@ -354,6 +368,34 @@
     "cableVDO" : "0x000A6642",
     "issueNum" : "#132",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/132",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : false,
+    "speed" : "USB 3.2 Gen 2 (10 Gbps)",
+    "type" : "passive",
+    "vendor" : "(zeroed)",
+    "vid" : "0x0000",
+    "xid" : "none"
+  },
+  {
+    "brand" : "Eudobel TB4-branded USB4 cable 1 m, Amazon (VID\/PID zeroed)",
+    "cableVDO" : "0x000A6643",
+    "issueNum" : "#589",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/589",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : false,
+    "speed" : "USB4 Gen 3 (40 Gbps, Thunderbolt 4 class)",
+    "type" : "passive",
+    "vendor" : "(zeroed)",
+    "vid" : "0x0000",
+    "xid" : "none"
+  },
+  {
+    "brand" : "LTT TrueSpec USB-C cable, marked 20 Gbps (e-marker has no 20 Gbps code, reads Gen 2)",
+    "cableVDO" : "0x110A6E42",
+    "issueNum" : "#470",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/470",
     "pid" : "0x0000",
     "power" : "5 A \/ 50 V (240 W)",
     "registered" : false,
@@ -756,6 +798,20 @@
     "xid" : "0x2600"
   },
   {
+    "brand" : "Apple Thunderbolt 4 Pro cable 1.8 m, reporter-identified (second PID alongside `0x7205`)",
+    "cableVDO" : "0x4368F8DB",
+    "issueNum" : "#534",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/534",
+    "pid" : "0x7209",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB4 Gen 3 (40 Gbps, Thunderbolt 4 class)",
+    "type" : "active",
+    "vendor" : "Apple",
+    "vid" : "0x05AC",
+    "xid" : "none"
+  },
+  {
     "brand" : "Apple Thunderbolt 5 cable 1 m (model A3189)",
     "cableVDO" : "0x110A2644",
     "issueNum" : "#93",
@@ -896,6 +952,20 @@
     "xid" : "0xBBB"
   },
   {
+    "brand" : "OM System camera bundled USB-C cable",
+    "cableVDO" : "0x00082052",
+    "issueNum" : "#615",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/615",
+    "pid" : "0xA454",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 3.2 Gen 2 (10 Gbps)",
+    "type" : "passive",
+    "vendor" : "Luxshare-ICT",
+    "vid" : "0x208E",
+    "xid" : "0x241205"
+  },
+  {
     "brand" : "Eizo EV2740X monitor bundled cable (KVM connection)",
     "cableVDO" : "0x00084041",
     "issueNum" : "#137",
@@ -908,6 +978,20 @@
     "vendor" : "Luxshare-ICT",
     "vid" : "0x208E",
     "xid" : "none"
+  },
+  {
+    "brand" : "Anker Bio-Braided A80E6 240 W cable (Luxshare e-marker variant of #519)",
+    "cableVDO" : "0x000A4640",
+    "issueNum" : "#535",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/535",
+    "pid" : "0xC187",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "Luxshare-ICT",
+    "vid" : "0x208E",
+    "xid" : "0x30"
   },
   {
     "brand" : "Monoprice Essentials USB-C 10 Gbps 0.5 m",
@@ -966,7 +1050,7 @@
     "xid" : "none"
   },
   {
-    "brand" : "OWC Thunderbolt 3 cable, bundled with Mercury Elite Pro Dock",
+    "brand" : "OWC Thunderbolt 3 cable, bundled with Mercury Elite Pro Dock; also shipped with the CalDigit TS3 Plus",
     "cableVDO" : "0x31082052",
     "issueNum" : "#143",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/143",
@@ -1106,6 +1190,34 @@
     "xid" : "0x294"
   },
   {
+    "brand" : "Corsair XENEON 34WQHD240-C monitor bundled cable (Hotron ODM, cert HT-C22)",
+    "cableVDO" : "0x00084041",
+    "issueNum" : "#609",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/609",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 3.2 Gen 1 (5 Gbps)",
+    "type" : "passive",
+    "vendor" : "Hotron Precision Electronic Ind. Corp.",
+    "vid" : "0x228A",
+    "xid" : "0x298"
+  },
+  {
+    "brand" : "OnePlus SuperVOOC 12 A USB-C cable (successor to #148, PID now zeroed)",
+    "cableVDO" : "0x700A2E40",
+    "issueNum" : "#525",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/525",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "GuangDong OPPO Mobile Telecommunications Corp., Ltd.",
+    "vid" : "0x22D9",
+    "xid" : "none"
+  },
+  {
     "brand" : "OnePlus SuperVOOC 10A cable (Type-C to Type-C)",
     "cableVDO" : "0x60082A40",
     "issueNum" : "#148",
@@ -1118,6 +1230,20 @@
     "vendor" : "GuangDong OPPO Mobile Telecommunications Corp., Ltd.",
     "vid" : "0x22D9",
     "xid" : "none"
+  },
+  {
+    "brand" : "Anker Zolo A8060 240 W braided cable 1 m",
+    "cableVDO" : "0x000A4640",
+    "issueNum" : "#529",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/529",
+    "pid" : "0x8060",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "Anker Innovations Limited",
+    "vid" : "0x291A",
+    "xid" : "0x3E09"
   },
   {
     "brand" : "Anker Nano 240 W USB-C cable 1.8 m",
@@ -1176,6 +1302,20 @@
     "xid" : "0x9DC"
   },
   {
+    "brand" : "Cuktech power bank bundled 240 W cable",
+    "cableVDO" : "0x000A2640",
+    "issueNum" : "#621",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/621",
+    "pid" : "0x4052",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "Zimi Corporation",
+    "vid" : "0x2B01",
+    "xid" : "0xD05"
+  },
+  {
     "brand" : "Cuktech Rainbow 240 W USB-C cable 1.5 m, Amazon (Zimi silicon)",
     "cableVDO" : "0x000A0640",
     "issueNum" : "#521",
@@ -1187,6 +1327,34 @@
     "type" : "passive",
     "vendor" : "Zimi Corporation",
     "vid" : "0x2B01",
+    "xid" : "none"
+  },
+  {
+    "brand" : "Cuktech C-C 240 W 2 m charging cable, JD.com",
+    "cableVDO" : "0x000A0640",
+    "issueNum" : "#540",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/540",
+    "pid" : "0x4092",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "Zimi Corporation",
+    "vid" : "0x2B01",
+    "xid" : "none"
+  },
+  {
+    "brand" : "Cable Matters Thunderbolt 3 cable 1.6 ft, 100 W (controller confirms 40 Gbps)",
+    "cableVDO" : "0x11082052",
+    "issueNum" : "#544",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/544",
+    "pid" : "0x1201",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 3.2 Gen 2 (10 Gbps)",
+    "type" : "passive",
+    "vendor" : "Lintes Technology Co., Ltd.",
+    "vid" : "0x2B1D",
     "xid" : "none"
   },
   {
@@ -1260,6 +1428,20 @@
     "xid" : "0x5FD"
   },
   {
+    "brand" : "Cable Matters 2 m TB4 active cable (Lintes silicon; same VID\/PID as the CalDigit 2 m in #111)",
+    "cableVDO" : "0x32084842",
+    "issueNum" : "#511",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/511",
+    "pid" : "0x1901",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 3.2 Gen 2 (10 Gbps)",
+    "type" : "passive",
+    "vendor" : "Lintes Technology Co., Ltd.",
+    "vid" : "0x2B1D",
+    "xid" : "none"
+  },
+  {
     "brand" : "CalDigit 2 m TB4 active cable",
     "cableVDO" : "0x3208485A",
     "issueNum" : "#111",
@@ -1285,6 +1467,20 @@
     "type" : "active",
     "vendor" : "Lintes Technology Co., Ltd.",
     "vid" : "0x2B1D",
+    "xid" : "none"
+  },
+  {
+    "brand" : "ORICO USB-C 20 Gbps 20 cm data cable (e-marker has no 20 Gbps code, reads Gen 2)",
+    "cableVDO" : "0x00082042",
+    "issueNum" : "#523",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/523",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 3.2 Gen 2 (10 Gbps)",
+    "type" : "passive",
+    "vendor" : "Dongguan ULT-unite Electronic Technology Co., LTD",
+    "vid" : "0x2BD3",
     "xid" : "none"
   },
   {
@@ -1378,6 +1574,34 @@
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/168",
     "pid" : "0x0000",
     "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "Shenzhen Injoinic Technology Co., Ltd.",
+    "vid" : "0x2E87",
+    "xid" : "none"
+  },
+  {
+    "brand" : "Cuktech 2-in-1 fast charge cable (Injoinic e-marker silicon)",
+    "cableVDO" : "0x000A2640",
+    "issueNum" : "#619",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/619",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "Shenzhen Injoinic Technology Co., Ltd.",
+    "vid" : "0x2E87",
+    "xid" : "none"
+  },
+  {
+    "brand" : "Anker 240 W charging cable (Injoinic e-marker silicon)",
+    "cableVDO" : "0x000A4640",
+    "issueNum" : "#618",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/618",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 50 V (240 W)",
     "registered" : true,
     "speed" : "USB 2.0 (480 Mbps)",
     "type" : "passive",
@@ -1568,7 +1792,7 @@
     "xid" : "0x1094"
   },
   {
-    "brand" : "FDBRO USB4 cable 40 Gbps 240 W, AliExpress (USB-IF certified)",
+    "brand" : "FDBRO USB4 cable 40 Gbps 240 W, AliExpress (USB-IF certified); also sold as RYRA RAIDEN 4",
     "cableVDO" : "0x110A4643",
     "issueNum" : "#420",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/420",
@@ -1664,6 +1888,20 @@
     "vendor" : "ifanr Inc.",
     "vid" : "0x36E9",
     "xid" : "0x15141"
+  },
+  {
+    "brand" : "CANDYSIGN CloudTie 100 W USB-C cable (claims EPR, 20 V max VBUS)",
+    "cableVDO" : "0x140A2040",
+    "issueNum" : "#500",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/500",
+    "pid" : "0x3001",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 2.0 (480 Mbps)",
+    "type" : "passive",
+    "vendor" : "ifanr Inc.",
+    "vid" : "0x36E9",
+    "xid" : "0x15140"
   },
   {
     "brand" : "Possibly Logitech BRIO webcam cable (reporter unsure)",
