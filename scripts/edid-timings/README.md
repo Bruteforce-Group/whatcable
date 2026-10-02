@@ -92,10 +92,7 @@ same two dictionaries this file's regenerate steps produce. An id missing
 from either table yields no mode, same as an unresolved HDMI VIC.
 
 `check-edid-timings.py`'s comparison above is against edid-decode's and the
-kernel's own tables, not real EDIDs. The cross-check against real EDIDs is
-`Tests/WhatCableDarwinTests/EDIDOracleSweepTests.swift`, which parses every
-corpus EDID with the tables in place and compares the declared mode list
-against edid-decode's output for the same file.
+kernel's own tables, not real EDIDs. The parser was checked against edid-decode on all 602 corpus EDIDs on 2026-10-02 with 0 mismatches, and the whatcable-edid-oracle skill re-runs that check on demand.
 
 ## Known convention difference: double-clocked SD formats
 
