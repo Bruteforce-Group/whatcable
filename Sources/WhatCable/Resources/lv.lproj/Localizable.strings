@@ -89,7 +89,7 @@
 "Privacy" = "Privātums";
 "Pro" = "Pro";
 "Proceed" = "Turpināt";
-"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version and chip type. This is data macOS already exposes on your Mac." = "Neapstrādātas IOKit reģistra īpašības, jūsu Mac pieejamo draiveru klašu saraksts, kā arī jūsu macOS versija un mikroshēmas veids. Šie ir dati, ko macOS jau padara pieejamus jūsu Mac.";
+"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version, chip type and Mac model identifier (for example, Mac14,3). This is data macOS already exposes on your Mac." = "Neapstrādātas IOKit reģistra īpašības, jūsu Mac pieejamo draiveru klašu saraksts, kā arī jūsu macOS versija, mikroshēmas veids un jūsu Mac modeļa identifikators (piemēram, Mac14,3). Šie ir dati, ko macOS jau padara pieejamus jūsu Mac.";
 "What happens" = "Kas notiek";
 "What is collected" = "Kas tiek ievākts";
 "WhatCable runs %lld IOKit probes that read hardware data your Mac already publishes. The results are sent to a secure server to help improve cable and port detection." = "WhatCable veic %lld IOKit pārbaudes, kas nolasa aparatūras datus, ko jūsu Mac jau publisko. Rezultāti tiek nosūtīti uz drošu serveri, lai palīdzētu uzlabot kabeļu un portu noteikšanu.";

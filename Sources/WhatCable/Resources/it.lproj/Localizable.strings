@@ -92,7 +92,7 @@
 "Privacy" = "Privacy";
 "Pro" = "Pro";
 "Proceed" = "Procedi";
-"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version and chip type. This is data macOS already exposes on your Mac." = "Proprietà registro Raw IOKit, un elenco di classi di driver presenti nel Mac, oltre alla versione di macOS e al tipo di chip. Questi sono i dati che macOS espone già nel Mac.";
+"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version, chip type and Mac model identifier (for example, Mac14,3). This is data macOS already exposes on your Mac." = "Proprietà registro Raw IOKit, un elenco di classi di driver presenti nel Mac, oltre alla versione di macOS, al tipo di chip e all'identificatore del modello del Mac (ad esempio, Mac14,3). Questi sono i dati che macOS espone già nel Mac.";
 "What happens" = "Cosa succede";
 "What is collected" = "Quali dati vengono raccolti";
 "WhatCable runs %lld IOKit probes that read hardware data your Mac already publishes. The results are sent to a secure server to help improve cable and port detection." = "WhatCable esegue %lld verifiche IOKit che leggono i dati hardware già pubblicati dal Mac. I risultati vengono inviati a un server sicuro per contribuire a migliorare il rilevamento di cavi e porte.";

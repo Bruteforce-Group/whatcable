@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import os.log
 import WhatCableCore
+import WhatCableDarwinBackend
 
 @MainActor
 final class TestKitRunner: ObservableObject {
@@ -52,6 +53,7 @@ final class TestKitRunner: ObservableObject {
         "40_hub_port_statistics",
         "41_class_discovery",
         "42_typec_phy_subtree",
+        "43_usb_port_subtree",
     ]
 
     /// Probes cheap to re-run and interesting to sample twice per kit run
@@ -124,6 +126,7 @@ final class TestKitRunner: ObservableObject {
             ? "\(ver.majorVersion).\(ver.minorVersion).\(ver.patchVersion)"
             : "\(ver.majorVersion).\(ver.minorVersion)"
         let chip = Self.chipName()
+        let model = DarwinSystemInfo.fetchMacModel()
         let timestamp = ISO8601DateFormatter().string(from: Date())
 
         guard let probesDir = Self.probesDirectory() else {
@@ -212,6 +215,7 @@ final class TestKitRunner: ObservableObject {
                 output: output,
                 macosVersion: macosVersion,
                 chip: chip,
+                model: model,
                 timestamp: timestamp
             )
 
@@ -235,6 +239,7 @@ final class TestKitRunner: ObservableObject {
             machineID: machineID,
             macosVersion: macosVersion,
             chip: chip,
+            model: model,
             passed: passed,
             failed: failed,
             total: total,
@@ -433,6 +438,7 @@ final class TestKitRunner: ObservableObject {
         output: String,
         macosVersion: String,
         chip: String,
+        model: String,
         timestamp: String
     ) async -> Bool {
         let payload: [String: Any] = [
@@ -441,6 +447,7 @@ final class TestKitRunner: ObservableObject {
             "output": output,
             "macos_version": macosVersion,
             "chip": chip,
+            "model": model,
             "timestamp": timestamp,
         ]
 
@@ -451,6 +458,7 @@ final class TestKitRunner: ObservableObject {
         machineID: String,
         macosVersion: String,
         chip: String,
+        model: String,
         passed: Int,
         failed: Int,
         total: Int,
@@ -460,6 +468,7 @@ final class TestKitRunner: ObservableObject {
             "machine_id": machineID,
             "macos_version": macosVersion,
             "chip": chip,
+            "model": model,
             "passed": passed,
             "failed": failed,
             "total": total,

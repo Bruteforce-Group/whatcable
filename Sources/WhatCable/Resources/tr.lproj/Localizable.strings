@@ -89,7 +89,7 @@
 "Privacy" = "Gizlilik";
 "Pro" = "Pro";
 "Proceed" = "Devam Et";
-"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version and chip type. This is data macOS already exposes on your Mac." = "Ham IOKit kayıt defteri özellikleri, Mac'inizde bulunan sürücü sınıflarının listesi, ayrıca macOS sürümünüz ve yonga türünüz. Bunlar macOS'un Mac'inizde zaten sunduğu verilerdir.";
+"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version, chip type and Mac model identifier (for example, Mac14,3). This is data macOS already exposes on your Mac." = "Ham IOKit kayıt defteri özellikleri, Mac'inizde bulunan sürücü sınıflarının listesi, ayrıca macOS sürümünüz, yonga türünüz ve Mac'inizin model tanımlayıcısı (örneğin, Mac14,3). Bunlar macOS'un Mac'inizde zaten sunduğu verilerdir.";
 "What happens" = "Ne olur";
 "What is collected" = "Ne toplanır";
 "WhatCable runs %lld IOKit probes that read hardware data your Mac already publishes. The results are sent to a secure server to help improve cable and port detection." = "WhatCable, Mac'inizin zaten yayımladığı donanım verilerini okuyan %lld IOKit probu çalıştırır. Sonuçlar, kablo ve bağlantı noktası algılamayı iyileştirmeye yardımcı olmak için güvenli bir sunucuya gönderilir.";

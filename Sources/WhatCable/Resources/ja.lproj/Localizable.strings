@@ -90,7 +90,7 @@
 "Privacy" = "プライバシー";
 "Pro" = "Pro";
 "Proceed" = "続行";
-"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version and chip type. This is data macOS already exposes on your Mac." = "生のIOKitレジストリプロパティ、Mac上に存在するドライバクラスの一覧、macOSのバージョン、チップの種類。これらはmacOSがMac上ですでに公開しているデータです。";
+"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version, chip type and Mac model identifier (for example, Mac14,3). This is data macOS already exposes on your Mac." = "生のIOKitレジストリプロパティ、Mac上に存在するドライバクラスの一覧、macOSのバージョン、チップの種類、Macのモデル識別子（例：Mac14,3）。これらはmacOSがMac上ですでに公開しているデータです。";
 "What happens" = "何が行われるか";
 "What is collected" = "収集される情報";
 "WhatCable runs %lld IOKit probes that read hardware data your Mac already publishes. The results are sent to a secure server to help improve cable and port detection." = "WhatCableは%lld個のIOKitプローブを実行し、Macがすでに公開しているハードウェアデータを読み取ります。結果はケーブルとポートの検出を改善するため、安全なサーバーに送信されます。";

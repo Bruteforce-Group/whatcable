@@ -137,7 +137,7 @@ struct TestKitConsentView: View {
                 infoRow(
                     icon: "list.clipboard",
                     title: String(localized: "What is collected", bundle: _appLocalizedBundle),
-                    detail: String(localized: "Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version and chip type. This is data macOS already exposes on your Mac.", bundle: _appLocalizedBundle)
+                    detail: String(localized: "Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version, chip type and Mac model identifier (for example, Mac14,3). This is data macOS already exposes on your Mac.", bundle: _appLocalizedBundle)
                 )
 
                 infoRow(

@@ -90,7 +90,7 @@
 "Privacy" = "隐私";
 "Pro" = "Pro";
 "Proceed" = "继续";
-"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version and chip type. This is data macOS already exposes on your Mac." = "原始 IOKit 注册表属性、你的 Mac 上存在的驱动程序类列表，以及你的 macOS 版本和芯片类型。这些是 macOS 已经在你的 Mac 上公开的数据。";
+"Raw IOKit registry properties, a list of the driver classes present on your Mac, plus your macOS version, chip type and Mac model identifier (for example, Mac14,3). This is data macOS already exposes on your Mac." = "原始 IOKit 注册表属性、你的 Mac 上存在的驱动程序类列表，以及你的 macOS 版本、芯片类型和 Mac 型号标识符（例如 Mac14,3）。这些是 macOS 已经在你的 Mac 上公开的数据。";
 "What happens" = "会发生什么";
 "What is collected" = "收集哪些内容";
 "WhatCable runs %lld IOKit probes that read hardware data your Mac already publishes. The results are sent to a secure server to help improve cable and port detection." = "WhatCable 会运行 %lld 个 IOKit 探测，读取你的 Mac 已经公开的硬件数据。结果会发送到安全服务器，以帮助改进线缆和端口检测。";
