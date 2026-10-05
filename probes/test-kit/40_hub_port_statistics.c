@@ -1,6 +1,7 @@
 // Dump every USB hub node (AppleUSB20Hub / AppleUSB30Hub) and per-downstream-port
 // node (AppleUSB20HubPort / AppleUSB30HubPort) in full, together with their whole
-// child subtrees. No field filtering: everything the kernel exposes is captured,
+// child subtrees. One field filter only: HID "Elements" tables print as an entry
+// count (see dumpDict). Otherwise we want everything the kernel exposes,
 // documented or not, because a field that looks useless today can matter for a
 // later WhatCable feature or a sibling app.
 //
@@ -52,7 +53,7 @@
 #include <string.h>
 #include <ctype.h>
 
-static const long long kByteBudget = 3LL * 1024 * 1024;
+static const long long kByteBudget = 5LL * 1024 * 1024;
 // Registry-node recursion cap (runaway backstop; real subtrees are ~10 deep).
 static const int kMaxDepth = 48;
 // CF property-value recursion cap (nested dicts/arrays within one node). Real
@@ -135,6 +136,17 @@ static int alreadySeen(io_service_t service) {
 
 static void dumpValue(CFTypeRef value, int indent, int vdepth);
 
+/* True when an "Elements" array is a HID element table: its first entry is a
+   dictionary carrying "ElementCookie". Every Elements array in the corpus
+   (3769 in probe 04, 3133 in probe 40) has this shape; anything else prints
+   in full. */
+static int isHIDElementTable(CFTypeRef v) {
+    if (!v || CFGetTypeID(v) != CFArrayGetTypeID() || CFArrayGetCount(v) == 0) return 0;
+    CFTypeRef first = CFArrayGetValueAtIndex(v, 0);
+    return first && CFGetTypeID(first) == CFDictionaryGetTypeID()
+        && CFDictionaryContainsKey(first, CFSTR("ElementCookie"));
+}
+
 static void dumpDict(CFDictionaryRef dict, int indent, int vdepth) {
     if (vdepth > kMaxValueDepth) { emitf("<max value depth>\n"); return; }
     CFIndex count = CFDictionaryGetCount(dict);
@@ -166,6 +178,19 @@ static void dumpDict(CFDictionaryRef dict, int indent, int vdepth) {
             }
         } else {
             emitf("<key>: ");
+        }
+        /* HID element tables. Keyboard, mouse and sensor drivers publish an
+           "Elements" array with one dictionary per key, button or axis
+           (hundreds per device). On machines with several HID devices these
+           tables alone took 80-97% of the byte budget and pushed every later root
+           out of the dump (42 of 1493 probe-04 outputs, 32 of 388 probe-40
+           outputs, measured 2026-10-05). They say nothing about ports, cables
+           or links, so print the entry count and move on. */
+        if (CFGetTypeID(keys[i]) == CFStringGetTypeID()
+            && CFStringCompare(keys[i], CFSTR("Elements"), 0) == kCFCompareEqualTo
+            && isHIDElementTable(vals[i])) {
+            emitf("[%ld entries omitted: HID element table]\n", (long)CFArrayGetCount(vals[i]));
+            continue;
         }
         dumpValue(vals[i], indent + 1, vdepth + 1);
     }

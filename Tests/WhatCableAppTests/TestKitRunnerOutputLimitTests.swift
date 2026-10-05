@@ -4,7 +4,7 @@ import Testing
 
 // These tests launch real subprocesses and include an intentional watchdog
 // timeout. Serial execution keeps the timeout test from racing the two
-// concurrent 4 MiB output fixtures on slower CI hosts.
+// concurrent 6 MiB output fixtures on slower CI hosts.
 @Suite("Test Kit probe output limit", .serialized)
 struct TestKitRunnerOutputLimitTests {
     @Test("Output at the byte limit is preserved")
@@ -58,12 +58,12 @@ struct TestKitRunnerOutputLimitTests {
         // self-limiting (exits on its own after the sleep): if the
         // escalation regresses, the test must FAIL fast on the elapsed-time
         // assertion, not hang the suite on a child nothing can kill.
-        // 66 x 64 KiB = 4.125 MiB, just over the cap.
+        // 97 x 64 KiB = 6.0625 MiB, just over the cap.
         let fixture = try makeScript(contents: """
             #!/bin/sh
             trap '' TERM
             i=0
-            while [ $i -lt 66 ]; do
+            while [ $i -lt 97 ]; do
               /bin/dd if=/dev/zero bs=65536 count=1 2>/dev/null
               i=$((i+1))
             done
@@ -138,6 +138,39 @@ struct TestKitRunnerOutputLimitTests {
         let body = try TestKitRunner.boundedJSONBody(payload)
 
         #expect(body != nil)
+    }
+
+    @Test("Every budgeted probe stops below the app's output cap")
+    @MainActor
+    func probeBudgetsSitUnderTheOutputCap() throws {
+        // A probe whose own byte budget reaches the app's cap has its whole
+        // output discarded (see outputOverLimitIsRejected), not trimmed. The
+        // budget can overshoot by one value, so keep at least 512 KiB clear.
+        let probes = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // WhatCableAppTests/
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // repo root
+            .appendingPathComponent("probes/test-kit")
+        let budgeted = [
+            "04_raw_registry_dump.c",
+            "40_hub_port_statistics.c",
+            "43_usb_port_subtree.c",
+        ]
+        let pattern = try NSRegularExpression(
+            pattern: #"(?:kByteBudget =|#define MAX_BYTES) \(?(\d+)LL \* 1024 \* 1024"#
+        )
+        for name in budgeted {
+            let source = try String(contentsOf: probes.appendingPathComponent(name), encoding: .utf8)
+            let ns = source as NSString
+            let match = try #require(
+                pattern.firstMatch(in: source, range: NSRange(location: 0, length: ns.length)),
+                "no MiB byte budget found in \(name)"
+            )
+            let mib = try #require(Int(ns.substring(with: match.range(at: 1))))
+            let headroom = 512 * 1024
+            #expect(mib * 1024 * 1024 + headroom <= TestKitRunner.maxProbeOutputBytes,
+                    "\(name) budget \(mib) MiB is too close to the app cap")
+        }
     }
 
     private func makeOutputFixture(byteCount: Int) throws -> URL {

@@ -13,8 +13,8 @@ final class TestKitRunner: ObservableObject {
     // Bound both the retained child output and the encoded network copy. The
     // higher request limit leaves room for JSON escaping while still imposing
     // a hard ceiling if an otherwise-valid output expands during serialization.
-    nonisolated static let maxProbeOutputBytes = 4 * 1024 * 1024
-    nonisolated static let maxRequestBodyBytes = 8 * 1024 * 1024
+    nonisolated static let maxProbeOutputBytes = 6 * 1024 * 1024
+    nonisolated static let maxRequestBodyBytes = 10 * 1024 * 1024
     private nonisolated static let probeReadChunkBytes = 64 * 1024
 
     enum State: Equatable {

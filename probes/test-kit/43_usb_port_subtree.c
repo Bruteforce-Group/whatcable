@@ -66,7 +66,7 @@
 //
 // Overrides for exercising branches a given machine cannot reach:
 //   -DMAX_BYTES=N              byte budget (default 3 MiB, under the
-//                              runner's 4 MiB cap, over which output is
+//                              runner's 6 MiB cap, over which output is
 //                              discarded whole)
 //   -DPROBE43_PORT_PLANE=\"X\"   plane name to treat as the IOPort plane
 //   -DPROBE43_IOPORT_CLASS=\"X\" class to match as IOPort
