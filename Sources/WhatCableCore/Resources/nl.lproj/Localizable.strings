@@ -140,6 +140,7 @@
 "Connected device: %@" = "Verbonden apparaat: %@";
 "Connected device: another Mac" = "Verbonden apparaat: een andere Mac";
 "USB link only" = "Alleen USB-verbinding";
+"Other USB devices on this port" = "Andere USB-apparaten op deze poort";
 "Connected device: %@, %@ (%@)" = "Verbonden apparaat: %1$@, %2$@ (%3$@)";
 "Data" = "Data";
 "DisplayPort Alt Mode" = "DisplayPort Alt Mode";

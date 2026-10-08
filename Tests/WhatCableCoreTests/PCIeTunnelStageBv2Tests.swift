@@ -663,13 +663,17 @@ struct PCIeTunnelStageBv2Tests {
             ancestorEntryIDs: [9999],
             product: "Some Hub Chip", isHub: true
         )
-        // Non-forced child of the hub: a normal (non-tunnelled) endpoint
-        // whose product name is an AFFILIATE match for chain device A
-        // ("TS5"), which would ordinarily promote onto its parent hub.
+        // Non-forced child of the hub, whose product name is an EXACT match
+        // for chain device A ("TS5"), so it is A's identity device and
+        // claims A for itself. It sits on the dock's own PCIe xHCI, so it
+        // carries the PCIe tunnel carrier (A publishes no USB3 adapter, and
+        // only a PCIe-carried SuperSpeed device can be its identity device).
+        // No root name, so the Stage A shortcut does not place it instead.
         let child = USBDevice(
             id: 31, locationID: 0x20540010, vendorID: 0x1234, productID: 0x1,
-            vendorName: nil, productName: "TS5 USB 3 Hub", serialNumber: nil,
+            vendorName: nil, productName: "TS5", serialNumber: nil,
             usbVersion: nil, speedRaw: 3, busPowerMA: nil, currentMA: nil,
+            isThunderboltTunnelled: true, tunnelCarrier: .pcieTunnel,
             rawProperties: [:]
         )
         let forest = USBDeviceNode.buildTree(from: [hub, child])
@@ -682,7 +686,7 @@ struct PCIeTunnelStageBv2Tests {
         #expect(result.regionRoots[30] == nil, "a forced hub must never become a regionRoot (claim target)")
         // The child's own claim downgrades to itself rather than promoting
         // onto the forced hub (conservative, per the plan).
-        #expect(result.regionOwner[31] == 5, "the child still gets its own affiliate-match evidence, just not promoted onto the forced hub")
+        #expect(result.regionOwner[31] == 5, "the child keeps its own identity evidence, never promoted onto the forced hub")
     }
 
     @Test("Test 16f: a forced node below an attributed ancestor renders in BOTH collapsed and expanded views (the vanishing-node case)")
@@ -842,12 +846,22 @@ struct PCIeTunnelStageBv2Tests {
         let switches = [host, a]
         let chain = ThunderboltTopology.tree(from: host, in: switches)
 
-        // Attributed ancestor: exact name match to A.
-        let ownedHub = USBDevice(
-            id: 60, locationID: 0x20540000, vendorID: 0x1234, productID: 0x1,
-            vendorName: nil, productName: "Dock A", serialNumber: nil,
-            usbVersion: nil, speedRaw: 3, busPowerMA: nil, currentMA: nil,
-            deviceClass: 0x09, rawProperties: [:]
+        // Attributed ancestor: Stage B places this hub in A by position
+        // (its controller path sits under A's PCI Path and A's entry ID is
+        // an ancestor), so the mark ABOVE the boundary is a position mark.
+        // An identity hub alone is not marked, so position is what gives
+        // the redundant-root walk a mark above to stop short of. Its name
+        // also matches A, which agrees with its position and changes
+        // nothing. The self-anchored identity device below sits on Dock A's
+        // own PCIe xHCI too, so it carries the PCIe tunnel carrier: Dock A
+        // publishes no USB3 adapter, and only a PCIe-carried SuperSpeed
+        // device can be its identity device. It has no root name, so the
+        // Stage A shortcut does not place it.
+        let ownedHub = pcieDevice(
+            id: 60, locationID: 0x20540000, rootName: "apciec1",
+            controllerPath: "IOService:/AppleARMPE/arm-io/apciec1@30000000/pcic1-bridge@0/xhci@0",
+            ancestorEntryIDs: [1],
+            product: "Dock A", vid: 0x1234, isHub: true
         )
         // Forced boundary, child of the owned hub: controller path points
         // at an unrelated branch (a genuine `.portLevel` finding).
@@ -872,6 +886,7 @@ struct PCIeTunnelStageBv2Tests {
             id: 62, locationID: 0x20541100, vendorID: 0x1234, productID: 0x2,
             vendorName: nil, productName: "Dock A", serialNumber: nil,
             usbVersion: nil, speedRaw: 3, busPowerMA: nil, currentMA: nil,
+            isThunderboltTunnelled: true, tunnelCarrier: .pcieTunnel,
             rawProperties: [:]
         )
         // A plain child of the self-anchored device, carrying no evidence
@@ -904,6 +919,7 @@ struct PCIeTunnelStageBv2Tests {
         // its own identity endpoint (exact name match to A), NOT erased by
         // redundant-root removal treating the OWNED HUB's mark above the
         // boundary as already covering it.
+        #expect(result.regionRoots[60] == 5, "fixture: Stage B gives the owned hub above the boundary its own position mark, so there is a mark above to cover 62")
         #expect(result.absorbed.contains(62), "self-anchoring claim below a boundary must survive, not be silently covered by a mark above the boundary")
         // Review fix (LOW, round 2026-08-13): `absorbed` alone never
         // consults `regionRoots`, so this test previously gave zero real
@@ -1004,6 +1020,97 @@ struct PCIeTunnelStageBv2Tests {
         )
         #expect(result.regionOwner[20] == nil, "a Stage B/numeric-identity contradiction must not resolve to either candidate")
         #expect(result.portLevelBoundaries.contains(20), "the numeric contradiction is a TERMINAL forcedPortLevel outcome, same as a name contradiction")
+    }
+
+    @Test("Test 16j: a numeric claim promoted onto a hub Stage B places in another box yields to Stage B, and every row still renders once in both views")
+    func promotionOntoStageBHubYieldsAndConservesRows() {
+        let host = hostRootSwitch(id: 1, socketID: "2", acioRootName: "acio1")
+        let aPath = "IOService:/AppleARMPE/arm-io/apciec1@30000000/pcic1-bridge@1"
+        let bPath = aPath + "/IOPP/pci-bridge@1"
+        // A's DROM carries a numeric vendor/model pair. B is chained behind
+        // A (a linear chain, which is what the chain layout renders; two
+        // first hops on one port are refused by design).
+        let a = IOThunderboltSwitch(
+            id: 5, className: "IOThunderboltSwitchType3", vendorID: 0x043E,
+            vendorName: "LG Electronics", modelName: "Dock A", routerID: 1,
+            depth: 1, routeString: 1, upstreamPortNumber: 1, maxPortNumber: 13,
+            supportedSpeed: SupportedSpeedMask(rawValue: 0xE),
+            ports: [IOThunderboltPort(
+                portNumber: 2, socketID: nil, adapterType: .pcieUp,
+                currentSpeed: nil, currentWidth: nil, targetWidth: nil,
+                rawTargetSpeed: nil, linkBandwidthRaw: nil,
+                pciPath: aPath, pciEntryID: 2
+            )],
+            parentSwitchUID: 1, dromVendorID: 0x1234, dromModelID: 0x5678
+        )
+        let b = pcieSwitch(id: 6, parent: 5, depth: 2, model: "Dock B", upPath: bPath, upEntryID: 1)
+        let switches = [host, a, b]
+        let chain = ThunderboltTopology.tree(from: host, in: switches)
+
+        // Hub H: Stage B places it in B (its controller path sits under
+        // B's PCI Path, the deeper of the two prefixes, and both entry IDs
+        // are ancestors). Its VID is A's DROM vendor only, so a numeric
+        // claim from a device below it would promote onto it for A (tier
+        // c). PID stays the helper's 0x9A00, no exact numeric match.
+        let hub = pcieDevice(
+            id: 30, locationID: 0x20540000, rootName: "apciec1",
+            controllerPath: bPath + "/xhci@0", ancestorEntryIDs: [2, 1],
+            product: "Hub Chip", vid: 0x1234, isHub: true
+        )
+        // Endpoint E under H: A's DROM pair exactly, so it is A's own
+        // identity device. High Speed and not tunnelled, so neither Stage B
+        // nor the USB3 check has anything to say about it on its own.
+        let endpoint = USBDevice(
+            id: 31, locationID: 0x20541000, vendorID: 0x1234, productID: 0x5678,
+            vendorName: nil, productName: "Billboard", serialNumber: nil,
+            usbVersion: nil, speedRaw: 2, busPowerMA: nil, currentMA: nil,
+            rawProperties: [:]
+        )
+        // Sibling S under H, carrying no evidence of its own.
+        let sibling = USBDevice(
+            id: 32, locationID: 0x20542000, vendorID: 0x2222, productID: 0x0001,
+            vendorName: nil, productName: "Keyboard", serialNumber: nil,
+            usbVersion: nil, speedRaw: 2, busPowerMA: nil, currentMA: nil,
+            rawProperties: [:]
+        )
+        let devices = [hub, endpoint, sibling]
+        let result = ChainDeviceAttribution.resolve(
+            chain: chain, forest: USBDeviceNode.buildTree(from: devices),
+            usbTunnelSwitchUIDs: [], expectedTunnelRootName: "apciec1"
+        )
+        #expect(result.regionOwner[30] == 6, "Stage B places the hub in B; a promotion onto it cannot move it")
+        #expect(result.regionOwner[32] == 6, "the sibling follows the hub")
+        #expect(result.regionOwner[31] == 5, "A's identity device stays A's, on its own")
+        #expect(result.absorbed == [31], "only the identity device is absorbed, into its own box")
+
+        // Rows: every device that is not absorbed renders exactly once in
+        // each view (hubs render only when shown), and the hub and sibling
+        // render under B, never under A.
+        let port = makePort(serviceName: "Port-USB-C@2", portNumber: 2)
+        for hubs in [ConnectedDeviceTree.HubDisplay.all, .endpointsOnly] {
+            let rows = ConnectedDeviceTree.rows(
+                devices: devices, port: port, thunderboltSwitches: switches, displayPorts: [], hubs: hubs
+            )
+            var section = ""
+            var sectionOf: [UInt64: String] = [:]
+            var counts: [UInt64: Int] = [:]
+            for row in rows {
+                if let device = row.device {
+                    counts[device.device.id, default: 0] += 1
+                    sectionOf[device.device.id] = section
+                } else if !row.label.hasPrefix("Display:"), !row.label.hasPrefix("USB bus") {
+                    section = row.label
+                }
+            }
+            #expect(counts[30, default: 0] == (hubs == .all ? 1 : 0), "\(hubs): the hub renders once when shown, never otherwise")
+            #expect(counts[31, default: 0] == 0, "\(hubs): the absorbed identity device is A's own row")
+            #expect(counts[32, default: 0] == 1, "\(hubs): the sibling renders exactly once")
+            #expect(sectionOf[32]?.contains("Dock B") == true, "\(hubs): the sibling sits under B, got \(sectionOf[32] ?? "nil")")
+            if hubs == .all {
+                #expect(sectionOf[30]?.contains("Dock B") == true, "\(hubs): the hub sits under B, got \(sectionOf[30] ?? "nil")")
+            }
+            #expect(rows.contains { $0.device == nil && $0.label.contains("Dock A") }, "\(hubs): A's own row is present")
+        }
     }
 
     @Test("Test 16h: attributed A -> forced F -> vendor-only descendant whose vendor is unique to A stays port-level")

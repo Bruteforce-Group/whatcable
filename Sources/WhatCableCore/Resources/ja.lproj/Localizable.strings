@@ -128,6 +128,7 @@
 "Connected device: %@" = "接続デバイス: %@";
 "Connected device: another Mac" = "接続デバイス: 別のMac";
 "USB link only" = "USBリンクのみ";
+"Other USB devices on this port" = "このポートのその他のUSBデバイス";
 "Connected device: %@, %@ (%@)" = "接続デバイス: %1$@、%2$@ (%3$@)";
 "Data" = "データ";
 "DisplayPort Alt Mode" = "DisplayPort オルタネートモード";

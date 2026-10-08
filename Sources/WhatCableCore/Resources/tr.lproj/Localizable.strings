@@ -140,6 +140,7 @@
 "Connected device: %@" = "Bağlı aygıt: %@";
 "Connected device: another Mac" = "Bağlı aygıt: başka bir Mac";
 "USB link only" = "Yalnızca USB bağlantısı";
+"Other USB devices on this port" = "Bu porttaki diğer USB aygıtları";
 "Connected device: %@, %@ (%@)" = "Bağlı aygıt: %1$@, %2$@ (%3$@)";
 "Data" = "Veri";
 "DisplayPort Alt Mode" = "DisplayPort Alt Mode";

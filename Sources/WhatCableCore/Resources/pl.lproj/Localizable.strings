@@ -128,6 +128,7 @@
 "Connected device: %@" = "Podłączone urządzenie: %@";
 "Connected device: another Mac" = "Podłączone urządzenie: inny Mac";
 "USB link only" = "Tylko połączenie USB";
+"Other USB devices on this port" = "Inne urządzenia USB na tym porcie";
 "Connected device: %@, %@ (%@)" = "Podłączone urządzenie: %1$@, %2$@ (%3$@)";
 "Data" = "Dane";
 "DisplayPort Alt Mode" = "Tryb alternatywny DisplayPort";

@@ -128,6 +128,7 @@
 "Connected device: %@" = "Միացված սարք՝ %@";
 "Connected device: another Mac" = "Միացված սարք՝ մեկ այլ Mac";
 "USB link only" = "Միայն USB կապ";
+"Other USB devices on this port" = "Այլ USB սարքեր այս պորտում";
 "Connected device: %@, %@ (%@)" = "Միացված սարք՝ %1$@, %2$@ (%3$@)";
 "Data" = "Տվյալներ";
 "DisplayPort Alt Mode" = "DisplayPort alt ռեժիմ";

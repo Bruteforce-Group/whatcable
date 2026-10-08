@@ -366,8 +366,13 @@ struct PCIeTunnelAttributionTests {
             #expect(occurrences == 1, "\(name) must render exactly once, saw \(occurrences)")
         }
         // With every tunnelled device structurally claimed, the flat
-        // "Other USB devices" fallback section has nothing to show.
-        #expect(!out.contains("Other USB devices"), "no flat section when everything is port-scoped")
+        // "Other USB devices" fallback section has nothing to show. Its
+        // heading ends in a colon; the per-port "Other USB devices on this
+        // port" heading is a different section and may appear.
+        #expect(!out.contains("Other USB devices:"), "no flat section when everything is port-scoped")
+        // The OWC port's hub names nothing, so the CLI prints it under that
+        // port's own other-devices heading.
+        #expect(out.contains("Other USB devices on this port"))
         // The devices sit inside the @2 port section: between the @2 header
         // and the @3 header.
         if let lgSection = out.range(of: "Port-USB-C@2"), let nextSection = out.range(of: "Port-USB-C@3") {

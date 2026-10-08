@@ -140,6 +140,7 @@
 "Connected device: %@" = "Savienotā ierīce: %@";
 "Connected device: another Mac" = "Savienotā ierīce: cits Mac";
 "USB link only" = "Tikai USB savienojums";
+"Other USB devices on this port" = "Citas USB ierīces šajā portā";
 "Connected device: %@, %@ (%@)" = "Savienotā ierīce: %1$@, %2$@ (%3$@)";
 "Data" = "Dati";
 "DisplayPort Alt Mode" = "DisplayPort alt režīms";

@@ -140,6 +140,7 @@
 "Connected device: %@" = "연결된 기기: %@";
 "Connected device: another Mac" = "연결된 기기: 다른 Mac";
 "USB link only" = "USB 링크만 해당";
+"Other USB devices on this port" = "이 포트의 기타 USB 기기";
 "Connected device: %@, %@ (%@)" = "연결된 기기: %1$@, %2$@ (%3$@)";
 "Data" = "데이터";
 "DisplayPort Alt Mode" = "DisplayPort Alt Mode";

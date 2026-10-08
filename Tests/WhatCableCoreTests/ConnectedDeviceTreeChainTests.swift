@@ -175,12 +175,17 @@ struct ConnectedDeviceTreeChainTests {
         )
     }
 
-    @Test("The reference machine collapses from twelve rows to four, each hanging off the right device")
+    @Test("The reference machine collapses from twelve rows to five, nothing drawn in a box without evidence")
     func referenceMachineRendersFourRows() throws {
+        // This fixture carries no Container IDs and no hop tables, so only the
+        // two identity endpoints have evidence (each is absorbed into its own
+        // box row). The Ethernet adapter was placed in the dock by vendor
+        // continuity before 2026-10-08; with evidence only, it moves under the
+        // port's other-devices heading.
         let rows = referenceRows(hubs: .endpointsOnly)
         let rendered = rows.map { "\(String(repeating: "  ", count: $0.depth))\($0.label)" }
-        #expect(rows.count == 4, "Expected four rows, got \(rows.count):\n\(rendered.joined(separator: "\n"))")
-        try #require(rows.count == 4)
+        #expect(rows.count == 5, "Expected five rows, got \(rows.count):\n\(rendered.joined(separator: "\n"))")
+        try #require(rows.count == 5)
 
         #expect(rows[0].depth == 0)
         #expect(rows[0].label == "Apple Studio Display - Thunderbolt link active at 40 Gbps")
@@ -191,9 +196,10 @@ struct ConnectedDeviceTreeChainTests {
         #expect(rows[2].depth == 1)
         #expect(rows[2].label == "Ugreen Group Limited TBT5 Docking Station 10-in-1 - Thunderbolt link active at 40 Gbps")
 
-        #expect(rows[3].depth == 2, "The Ethernet adapter is inside the dock, so it sits one level under it")
-        #expect(rows[3].label == "USB 10/100/1000 LAN (Realtek) - Super Speed (5 Gbps)")
-        #expect(rows[3].device?.device.id == 11)
+        #expect(rows[3] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0))
+        #expect(rows[4].depth == 1, "Under the heading, not inside the dock")
+        #expect(rows[4].label == "USB 10/100/1000 LAN (Realtek) - Super Speed (5 Gbps) \u{00B7} via 4 hubs")
+        #expect(rows[4].device?.device.id == 11)
     }
 
     @Test("The display's and the dock's own USB identity endpoints are not listed twice")
@@ -207,31 +213,26 @@ struct ConnectedDeviceTreeChainTests {
         #expect(!all.contains { $0.device?.device.id == 4 })
     }
 
-    @Test("The Ethernet adapter sits under the dock in BOTH hub modes")
+    @Test("The Ethernet adapter sits under the other-devices heading in BOTH hub modes")
     func placementAgreesAcrossHubModes() throws {
-        // The bug this pins: an earlier draft resolved vendor continuity per
-        // endpoint in the collapsed view only, so the adapter sat inside the dock
-        // by default and jumped out to a sibling subtree the moment the user
-        // clicked "Show hubs" (and never got the right placement in the CLI,
-        // which always renders every hub). Both modes now read the same
-        // ownership, so the device cannot move.
+        // The bug this pins: an earlier draft placed the adapter differently in
+        // the collapsed and expanded views. Both modes read the same ownership,
+        // so the device cannot move when the user clicks "Show hubs".
         let collapsed = referenceRows(hubs: .endpointsOnly)
         let expanded = referenceRows(hubs: .all)
 
-        let dockRow = try #require(expanded.firstIndex { $0.label.contains("TBT5 Docking Station") })
+        let headerRow = try #require(expanded.firstIndex(of: ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0)))
         let lanRow = try #require(expanded.firstIndex { $0.device?.device.id == 11 })
-        #expect(lanRow > dockRow, "The adapter must be rendered inside the dock's subtree")
-        let dockDepth = expanded[dockRow].depth
-        #expect(expanded[lanRow].depth > dockDepth)
-        // Nothing between the dock row and the adapter may be shallower than the
-        // dock: that would mean the subtree had already closed.
-        for row in expanded[(dockRow + 1)..<lanRow] {
-            #expect(row.depth > dockDepth, "Row '\(row.label)' closed the dock's subtree before the adapter")
+        try #require(lanRow > headerRow, "The adapter must be rendered under the heading")
+        // Nothing between the heading and the adapter may close the section.
+        for row in expanded[(headerRow + 1)..<lanRow] {
+            #expect(row.depth > 0, "Row '\(row.label)' closed the section before the adapter")
         }
 
-        let collapsedLAN = try #require(collapsed.first { $0.device?.device.id == 11 })
-        let collapsedDock = try #require(collapsed.first { $0.label.contains("TBT5 Docking Station") })
-        #expect(collapsedLAN.depth == collapsedDock.depth + 1)
+        let collapsedHeader = try #require(collapsed.firstIndex(of: ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0)))
+        let collapsedLAN = try #require(collapsed.firstIndex { $0.device?.device.id == 11 })
+        #expect(collapsedLAN > collapsedHeader)
+        #expect(collapsed[collapsedLAN].depth == 1)
     }
 
     @Test("Expanded, every device still renders exactly once")
@@ -255,23 +256,24 @@ struct ConnectedDeviceTreeChainTests {
         #expect(Set(hidden) == hubIDs)
     }
 
-    @Test("Collapsed rows attributed to a chain device carry no hop count")
-    func attributedRowsDropTheHopCount() {
-        // The adapter is four hubs deep, but those hubs are the dock's own
-        // internals and the row already says it is in the dock. The count stays
-        // on rows that could not be placed, where nothing else says how far away
-        // the device is.
+    @Test("Collapsed rows carry a hop count only under the other-devices heading")
+    func attributedRowsDropTheHopCount() throws {
+        // The count stays on rows that could not be placed, where nothing else
+        // says how far away the device is. Rows inside a box never carry it
+        // (the private chain-step fixtures pin that on a placed adapter).
         let rows = referenceRows(hubs: .endpointsOnly)
-        #expect(!rows.contains { $0.label.contains("via") },
-            "Attributed rows should not also claim a hop count: \(rows.map(\.label))")
+        let header = try #require(rows.firstIndex(of: ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0)))
+        #expect(!rows[..<header].contains { $0.label.contains("via") },
+            "Rows above the heading should not claim a hop count: \(rows.map(\.label))")
+        #expect(rows[(header + 1)...].contains { $0.label.contains("via 4 hubs") })
     }
 
     // MARK: - The layout gate
 
-    @Test("One chain device and no name match: the layout is exactly what it was")
+    @Test("One chain device and no evidence: the devices move under the other-devices heading")
     func singleDeviceNoMatchIsUnchanged() throws {
-        // The old layout, byte for byte: root row, then the plain USB tree
-        // shifted one level under it, hop counts and all.
+        // The old layout's device rows, hop counts and all, now under the
+        // port's other-devices heading instead of inside the box.
         let switches = [
             sw(id: 100, parent: nil, vendor: "Apple, Inc.", model: "iOS", depth: 0, socketID: "4"),
             sw(id: 200, parent: 100, vendor: "CalDigit, Inc.", model: "TS3 Plus", depth: 1),
@@ -284,11 +286,12 @@ struct ConnectedDeviceTreeChainTests {
             devices: devices, port: makePort(),
             thunderboltSwitches: switches, displayPorts: [], hubs: .endpointsOnly
         )
-        try #require(rows.count == 2)
+        try #require(rows.count == 3)
         #expect(rows[0].depth == 0)
         #expect(rows[0].label == "CalDigit, Inc. TS3 Plus - Thunderbolt link active at 40 Gbps")
-        #expect(rows[1].depth == 1)
-        #expect(rows[1].label.contains("via 1 hub"), "The old layout's hop count still applies: \(rows[1].label)")
+        #expect(rows[1] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0))
+        #expect(rows[2].depth == 1)
+        #expect(rows[2].label.contains("via 1 hub"), "The old layout's hop count still applies: \(rows[2].label)")
     }
 
     /// One hub and one endpoint on each of two USB controllers. The old layout
@@ -358,7 +361,7 @@ struct ConnectedDeviceTreeChainTests {
             "Expected the fallback to show both hubs: \(rows.map(\.label))")
     }
 
-    @Test("One chain device WITH a name match: the identity endpoint is absorbed and the rest still hangs under it")
+    @Test("One chain device WITH a name match: the identity endpoint is absorbed, the rest goes under the other-devices heading")
     func singleDeviceWithMatchAbsorbsOnly() throws {
         let switches = [
             sw(id: 100, parent: nil, vendor: "Apple, Inc.", model: "iOS", depth: 0, socketID: "4"),
@@ -373,19 +376,22 @@ struct ConnectedDeviceTreeChainTests {
             devices: devices, port: makePort(),
             thunderboltSwitches: switches, displayPorts: [], hubs: .endpointsOnly
         )
-        try #require(rows.count == 2)
+        // The Billboard's name marks only itself, so the Fresco hub and the
+        // adapter behind it have no evidence.
+        try #require(rows.count == 3)
         #expect(rows[0].label.contains("TBT5 Docking Station"))
-        #expect(rows[1].device?.device.id == 3)
-        #expect(rows[1].depth == 1)
+        #expect(rows[1] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0))
+        #expect(rows[2].device?.device.id == 3)
+        #expect(rows[2].depth == 1)
         #expect(!rows.contains { $0.device?.device.id == 2 })
     }
 
-    @Test("A daisy chain nobody can name still shows both devices, with the USB tree left where it was")
+    @Test("A daisy chain nobody can name shows both devices, and the USB tree under its own heading")
     func unmatchedDaisyChainDegradesSafely() throws {
         // 22 of the 24 multi-device chains in the corpus look like this. The
         // chain rows are read from the fabric so they are exact; the devices are
-        // not attributable, so they stay at depth 1 under the first hop with
-        // their hop counts, exactly as before.
+        // not attributable, so they go under the port's other-devices heading
+        // with their hop counts, never under the first hop.
         let switches = [
             sw(id: 100, parent: nil, vendor: "Apple, Inc.", model: "iOS", depth: 0, socketID: "4"),
             sw(id: 200, parent: 100, vendor: "CalDigit, Inc.", model: "TS3 Plus", depth: 1),
@@ -399,12 +405,13 @@ struct ConnectedDeviceTreeChainTests {
             devices: devices, port: makePort(),
             thunderboltSwitches: switches, displayPorts: [], hubs: .endpointsOnly
         )
-        try #require(rows.count == 3)
+        try #require(rows.count == 4)
         #expect(rows[0].depth == 0 && rows[0].label.contains("TS3 Plus"))
         #expect(rows[1].depth == 1 && rows[1].label.contains("Drive Dock"))
-        #expect(rows[2].depth == 1, "An unplaceable device stays under the first hop, not inside a guessed parent")
-        #expect(rows[2].device?.device.id == 2)
-        #expect(rows[2].label.contains("via 1 hub"))
+        #expect(rows[2] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0), "An unplaceable device is not drawn inside any box")
+        #expect(rows[3].depth == 1)
+        #expect(rows[3].device?.device.id == 2)
+        #expect(rows[3].label.contains("via 1 hub"))
     }
 
     @Test("A bare dock with nothing plugged in shows the dock, not nine hubs")
@@ -452,7 +459,9 @@ struct ConnectedDeviceTreeChainTests {
             devices: devices, port: makePort(),
             thunderboltSwitches: switches, displayPorts: [], hubs: .endpointsOnly
         )
-        #expect(rows.filter { $0.depth == 0 }.count == 1, "Only one row may sit at depth 0: \(rows.map(\.label))")
+        let boxRows = rows.filter { $0.depth == 0 && $0 != ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0) }
+        #expect(boxRows.count == 1, "Only one box row may sit at depth 0: \(rows.map(\.label))")
+        #expect(rows.contains(ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0)), "the devices sit under the other-devices heading")
         // And the identity endpoint is NOT absorbed here, because the old layout
         // knows nothing about attribution.
         #expect(rows.contains { $0.device?.device.id == 2 })
@@ -473,12 +482,14 @@ struct ConnectedDeviceTreeChainTests {
     }
 
     @Test("Chain rows carry no USB node, so they render as plain text")
-    func chainRowsCarryNoDevice() {
+    func chainRowsCarryNoDevice() throws {
         let rows = referenceRows(hubs: .endpointsOnly)
+        try #require(rows.count == 5)
         #expect(rows[0].device == nil)
         #expect(rows[1].device == nil)
         #expect(rows[2].device == nil)
-        #expect(rows[3].device != nil)
+        #expect(rows[3].device == nil, "the other-devices heading is plain text too")
+        #expect(rows[4].device != nil)
     }
 
     @Test("Every row's depth is one more than a row above it, so no row hangs in space")

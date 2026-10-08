@@ -89,6 +89,9 @@ struct ChainAttributionProbeSweepTests {
         /// probe 29's `USB Port Map =     Data[15]: 01 81 94 ...` text into
         /// the raw `Data` production reads from a live property.
         let usbPortMap: Data?
+        /// The router's chip `Device ID`, used only to match probe 29's flat
+        /// port blocks back to their switch (`probe29Ports`).
+        let deviceID: Int64?
     }
 
     /// Probe 29 prints the raw `USB Port Map` bytes as
@@ -171,13 +174,14 @@ struct ChainAttributionProbeSweepTests {
                 dromVendorID: intValue(body, "Device Vendor ID").map(Int.init),
                 dromModelID: intValue(body, "Device Model ID").map(Int.init),
                 routeString: intValue(body, "Route String") ?? 0,
-                usbPortMap: Self.portMapData(body)
+                usbPortMap: Self.portMapData(body),
+                deviceID: intValue(body, "Device ID")
             )
         }
         return byEntry.values.sorted { $0.entryID < $1.entryID }
     }
 
-    private static func model(_ raw: RawSwitch) -> IOThunderboltSwitch {
+    private static func model(_ raw: RawSwitch, ports: [IOThunderboltPort] = []) -> IOThunderboltSwitch {
         IOThunderboltSwitch(
             id: raw.entryID,
             className: "IOThunderboltSwitch",
@@ -190,7 +194,7 @@ struct ChainAttributionProbeSweepTests {
             upstreamPortNumber: 1,
             maxPortNumber: 12,
             supportedSpeed: SupportedSpeedMask(rawValue: 0),
-            ports: [],
+            ports: ports,
             // Entry IDs stand in for UIDs here: the graph only needs the parent
             // link to be internally consistent, which it is.
             parentSwitchUID: raw.parentEntryID == 0 ? nil : raw.parentEntryID,
@@ -201,8 +205,11 @@ struct ChainAttributionProbeSweepTests {
     }
 
     /// Downstream chains, one per host root that has anything below it.
-    private static func chains(_ raws: [RawSwitch]) -> [[IOThunderboltSwitchNode]] {
-        let switches = raws.map(model)
+    private static func chains(
+        _ raws: [RawSwitch],
+        ports: [Int64: [IOThunderboltPort]] = [:]
+    ) -> [[IOThunderboltSwitchNode]] {
+        let switches = raws.map { model($0, ports: ports[$0.entryID] ?? []) }
         return raws
             .filter { $0.depth == 0 }
             .map { ThunderboltTopology.tree(from: model($0), in: switches) }
@@ -392,16 +399,6 @@ struct ChainAttributionProbeSweepTests {
     /// test has to re-derive that rather than read `allAnchored` back off the
     /// result. It read the result at first, which made the check agree with a
     /// mutation that removed the gate.
-    /// Independent word-matching floor, mirroring the length-gate discipline
-    /// `ChainDeviceAttribution` uses everywhere it compares two names
-    /// (`key.count >= 3`, "two characters is not a name, it is a chance
-    /// collision"): a name shorter than 3 characters after normalising is
-    /// never treated as evidence, in either position.
-    private static func vendorNamesMatch(_ a: String, _ b: String) -> Bool {
-        guard normalise(a).count >= 3, normalise(b).count >= 3 else { return false }
-        return wordRunMatch(a, b)
-    }
-
     /// Chain device whose DROM (Device Vendor ID, Device Model ID) exactly
     /// equals a USB device's own (idVendor, idProduct), if any. Own
     /// re-derivation, reading the same `dromVendorID`/`dromModelID` fields
@@ -425,105 +422,36 @@ struct ChainAttributionProbeSweepTests {
         return matches.count == 1 ? matches.first : nil
     }
 
-    /// Set of chain devices whose DROM vendor id equals `vid`, zero-guarded.
-    /// Own re-derivation of production's `chainDevicesWithDROMVendorID`.
-    private static func chainDevicesWithDROMVendorID(_ vid: Int, chain: [IOThunderboltSwitchNode]) -> [IOThunderboltSwitchNode] {
-        guard vid != 0 else { return [] }
-        return chain.filter { $0.sw.dromVendorID == vid }
-    }
-
-    /// Independent re-derivation of `ChainDeviceAttribution.claimTarget`'s
-    /// #493 fix (round 4, numeric-first), shared between `structuralMarks`
-    /// and the conflict-guard recheck in `sweep()` (both need the SAME
-    /// redirection decision, and duplicating it risked the two drifting apart
-    /// the way the original unconditional-promotion assumption did). Own
-    /// function, own word-matching (`wordRunMatch` via `vendorNamesMatch`)
-    /// and own numeric lookup (`numericIdentity` above), nothing shared with
-    /// production.
-    ///
-    /// Same four tiers as production, in the same order: (a)/(b) the hub's
-    /// OWN idVendor/idProduct exactly identifies it as a chain device,
-    /// decisive either way; (c) the claiming endpoint is numerically
-    /// identified but the hub is not, so VID-only decides (the multi-chip
-    /// dock pattern) when it can, else falls through; (d) no numeric
-    /// evidence at all: the ORIGINAL (round 2) string rule, a hub vendor name
-    /// match to the claimer winning over a match to a different chain device.
-    /// Returns the redirection target AND the switch id the claim is now
-    /// recorded against, since numeric identity can override the NAME
-    /// match's switch id when the two disagree.
-    private static func claimTarget(
+    /// Own re-derivation of production's identity rule (owner ruling
+    /// 2026-10-08): an identity claim places only the identity device itself,
+    /// never its parent hub. The box it names is the device's own DROM
+    /// numbers when they identify exactly one chain device, else the name
+    /// match's (numbers beat the name). A hub identity device is not marked:
+    /// production marks one only where position already places that hub in
+    /// the same box, and the structural merge in `structuralMarks`
+    /// reproduces that mark on its own.
+    private static func claimBox(
         _ device: USBDevice,
         claimedBy switchID: Int64,
-        chain: [IOThunderboltSwitchNode],
-        byLocation: [UInt32: USBDevice]
-    ) -> (target: UInt64, switchID: Int64) {
-        // Computed FIRST, before any early return, and used on every return
-        // path, including the hub-claimant and no-hub-parent ones below.
-        // Own re-derivation of production's round-5 fix: an earlier version
-        // (matching production's own earlier bug) only computed this on the
-        // has-a-hub-parent path.
-        let endpointIdentity = numericIdentity(of: device, chain: chain)
-        let effectiveSwitchID = endpointIdentity?.sw.id ?? switchID
-
-        if device.isHub { return (device.id, effectiveSwitchID) }
-        guard let parentLoc = USBDevice.parentLocationID(device.locationID),
-              let parent = byLocation[parentLoc], parent.isHub
-        else { return (device.id, effectiveSwitchID) }
-
-        if let hubIdentity = numericIdentity(of: parent, chain: chain) {
-            return hubIdentity.sw.id == effectiveSwitchID
-                ? (parent.id, effectiveSwitchID)
-                : (device.id, effectiveSwitchID)
-        }
-
-        if let endpointIdentity {
-            // Set-based, mirroring `numericIdentity`'s own ambiguity rule:
-            // ANY different chain device sharing the hub's VID refuses, even
-            // if the claimer is also in the set; only an EXACT {claimer} set
-            // promotes; an empty set falls through.
-            let hubVID = Int(parent.vendorID)
-            let matchingChainDevices = chainDevicesWithDROMVendorID(hubVID, chain: chain)
-            if matchingChainDevices.contains(where: { $0.sw.id != endpointIdentity.sw.id }) {
-                return (device.id, effectiveSwitchID)
-            }
-            if matchingChainDevices.count == 1 {
-                return (parent.id, effectiveSwitchID)
-            }
-            // Falls through: VID-only inconclusive, string tier decides.
-        }
-
-        // Tier (d): round-2 string ordering, unchanged. A hub vendor name
-        // match to the claimer, its own vendor or its chain device's DROM
-        // vendor, wins over a match to a different chain device.
-        guard let hubVendor = parent.vendorName else { return (parent.id, effectiveSwitchID) }
-        var chainVendorByID: [Int64: String] = [:]
-        for node in chain { chainVendorByID[node.sw.id] = node.sw.vendorName }
-        let matchesClaimingDevice = device.vendorName.map { vendorNamesMatch(hubVendor, $0) } ?? false
-        let matchesClaimingChain = chainVendorByID[effectiveSwitchID].map { vendorNamesMatch(hubVendor, $0) } ?? false
-        if matchesClaimingDevice || matchesClaimingChain { return (parent.id, effectiveSwitchID) }
-        let namesADifferentChainDevice = chain.contains { other in
-            other.sw.id != effectiveSwitchID && vendorNamesMatch(hubVendor, other.sw.vendorName)
-        }
-        return namesADifferentChainDevice ? (device.id, effectiveSwitchID) : (parent.id, effectiveSwitchID)
+        chain: [IOThunderboltSwitchNode]
+    ) -> Int64? {
+        if device.isHub { return nil }
+        return numericIdentity(of: device, chain: chain)?.sw.id ?? switchID
     }
 
     private static func structuralMarks(
         chain: [IOThunderboltSwitchNode],
         devices: [USBDevice]
     ) -> (marks: [UInt64: Int64], resolvedSwitches: Set<Int64>, affiliateMarksRefused: Int) {
-        let byLocation = Dictionary(devices.map { ($0.locationID, $0) }, uniquingKeysWith: { a, _ in a })
         let forest = USBDeviceNode.buildTree(from: devices)
 
         func marks(_ matches: [(device: USBDevice, switchID: Int64)]) -> [UInt64: Int64] {
-            var claims: [UInt64: Set<Int64>] = [:]
+            var result: [UInt64: Int64] = [:]
             for match in matches {
-                let (target, effectiveSwitchID) = Self.claimTarget(
-                    match.device, claimedBy: match.switchID,
-                    chain: chain, byLocation: byLocation
-                )
-                claims[target, default: []].insert(effectiveSwitchID)
+                guard let box = Self.claimBox(match.device, claimedBy: match.switchID, chain: chain) else { continue }
+                result[match.device.id] = box
             }
-            return claims.compactMapValues { $0.count == 1 ? $0.first : nil }
+            return result
         }
 
         func ownership(_ current: [UInt64: Int64]) -> [UInt64: Int64] {
@@ -537,20 +465,20 @@ struct ChainAttributionProbeSweepTests {
             return owner
         }
 
+        // Identity claims: an exact name match, or a device whose own
+        // VID/PID equal exactly one chain device's DROM pair. Partial names
+        // group nothing (2026-10-08).
         var exactMatches: [(device: USBDevice, switchID: Int64)] = []
-        var softMatches: [(device: USBDevice, switchID: Int64)] = []
         for device in devices {
-            guard let product = device.productName, normalise(product).count >= 3 else { continue }
-            let named = chain.filter { normalise($0.sw.modelName).count >= 3 }
-            let exact = named.filter { normalise($0.sw.modelName) == normalise(product) }
-            if !exact.isEmpty {
-                if exact.count == 1, let id = exact.first?.sw.id {
-                    exactMatches.append((device, id))
+            if let product = device.productName, normalise(product).count >= 3 {
+                let named = chain.filter { normalise($0.sw.modelName).count >= 3 }
+                let exact = named.filter { normalise($0.sw.modelName) == normalise(product) }
+                if !exact.isEmpty {
+                    if exact.count == 1, let id = exact.first?.sw.id { exactMatches.append((device, id)) }
+                    continue
                 }
-                continue
             }
-            let soft = named.filter { wordRunMatch(product, $0.sw.modelName) }
-            if soft.count == 1, let id = soft.first?.sw.id { softMatches.append((device, id)) }
+            if let box = numericIdentity(of: device, chain: chain) { exactMatches.append((device, box.sw.id)) }
         }
 
         // Structural tunnel pass, independent re-derivation: a
@@ -610,10 +538,14 @@ struct ChainAttributionProbeSweepTests {
                       bridgeDepth >= 2, bridgeDepth % 2 == 0,
                       let switchID = switchByDepth[bridgeDepth / 2]
                 else { continue }
-                // Precedence safety: a device's own exact-name match
-                // disagreeing with the structural switch wins; structural is
-                // skipped for that device (mirrors production's
-                // `structurallyConflicted` exclusion).
+                // Precedence safety: a device whose own exact-name or
+                // numeric match disagrees with the structural switch is not
+                // placed structurally. Production goes further and also
+                // drops the identity claim and stops inheritance below it
+                // (`forcedPortLevelIDs`); this oracle still keeps the
+                // identity claim, so the ownership equality below would fail
+                // on any swept folder that reached that case. None does
+                // today.
                 if let namedSwitch = exactByDevice[device.id], namedSwitch != switchID { continue }
                 structuralResult[device.id] = switchID
             }
@@ -624,16 +556,7 @@ struct ChainAttributionProbeSweepTests {
         // check above), mirroring production's precedence.
         var result = marks(exactMatches)
         result.merge(structuralResult) { _, structural in structural }
-        let afterExact = ownership(result)
-        var refused = 0
-        for (id, switchID) in marks(softMatches) {
-            if let established = afterExact[id], established != switchID {
-                refused += 1
-                continue
-            }
-            if result[id] == nil { result[id] = switchID }
-        }
-        return (result, Set(result.values), refused)
+        return (result, Set(result.values), 0)
     }
 
     /// Word-run containment, either direction, written from the rule rather than
@@ -683,7 +606,6 @@ struct ChainAttributionProbeSweepTests {
         var absorbedTotal = 0
         var marks = 0
         var vendorMarks = 0
-        var conflictGuardFired = 0
         var affiliateMarksRefused = 0
         var allAnchoredChains = 0
         var multiDeviceAllAnchored = 0
@@ -779,31 +701,41 @@ struct ChainAttributionProbeSweepTests {
                     "\(folder): device \(node.device.id) owner \(String(describing: result.regionOwner[node.device.id])) is not its nearest mark \(String(describing: expected))")
             }
 
-            // 3. Everything absorbed names a chain device exactly, and uniquely.
-            // This re-checks the absorb rule against the raw strings rather than
-            // trusting the resolver's own matching.
+            // 3. Everything absorbed is a chain device's own identity device:
+            // its product name equals one chain device's model name, or its
+            // idVendor/idProduct equal one chain device's DROM numbers. Either
+            // way it matches exactly one. This re-checks the absorb rule
+            // against the raw values rather than trusting the resolver's own
+            // matching.
             for id in result.absorbed {
-                guard let device = devices.first(where: { $0.id == id }),
-                      let product = device.productName else {
-                    Issue.record("\(folder): absorbed id \(id) has no product name")
+                guard let device = devices.first(where: { $0.id == id }) else {
+                    Issue.record("\(folder): absorbed id \(id) is not a device")
                     continue
                 }
-                let matching = chainNodes.filter { Self.normalise($0.sw.modelName) == Self.normalise(product) }
-                #expect(matching.count == 1,
-                    "\(folder): absorbed '\(product)' which matches \(matching.count) chain devices, not 1")
+                let byName = device.productName.map { product in
+                    chainNodes.filter { Self.normalise($0.sw.modelName) == Self.normalise(product) }
+                } ?? []
+                let byNumbers = chainNodes.filter {
+                    guard device.vendorID != 0, device.productID != 0,
+                          let dvid = $0.sw.dromVendorID, dvid != 0,
+                          let dmid = $0.sw.dromModelID, dmid != 0
+                    else { return false }
+                    return dvid == Int(device.vendorID) && dmid == Int(device.productID)
+                }
+                #expect(byName.count == 1 || byNumbers.count == 1,
+                    "\(folder): absorbed '\(device.productName ?? "?")' matches \(byName.count) chain devices by name and \(byNumbers.count) by DROM numbers, not 1 of either")
             }
 
-            // 4. Vendor continuity is off unless every chain device is matched,
-            // and when it is off the marks are exactly the structural ones.
+            // 4. Every mark is evidence the re-derivation reproduces.
             let (structural, resolvedSwitches, refusedHere) = Self.structuralMarks(chain: chainNodes, devices: devices)
             affiliateMarksRefused += refusedHere
-            // Counted as marks the structural pass did not produce, not as a
-            // count difference: production collapses redundant nested marks, so
-            // the two sets differ in both directions.
+            // Marks production made that the re-derivation did not. Production
+            // collapses redundant nested marks, so this is not a count
+            // difference. Expected to stay 0: nothing guesses any more.
             vendorMarks += result.regionRoots.keys.filter { structural[$0] == nil }.count
             let everyChainDeviceResolved = resolvedSwitches.count == chainNodes.count
             #expect(result.allAnchored == everyChainDeviceResolved,
-                "\(folder): the vendor-continuity gate says \(result.allAnchored) but \(resolvedSwitches.count) of \(chainNodes.count) chain devices hold a region")
+                "\(folder): allAnchored says \(result.allAnchored) but \(resolvedSwitches.count) of \(chainNodes.count) chain devices hold a region")
 
             // Compared as OWNERSHIP, not as mark sets. The two are not the same
             // thing: production drops a mark whose nearest marked ancestor has
@@ -820,17 +752,10 @@ struct ChainAttributionProbeSweepTests {
             }
             for root in forest { inherit(root, nil) }
 
-            if !everyChainDeviceResolved {
-                #expect(result.regionOwner == expectedOwner,
-                    "\(folder): ownership differs from the structural pass on a chain that is not fully matched, so vendor continuity ran when it should not have")
-            } else {
-                // Vendor continuity may place MORE devices, never move one the
-                // structure already placed.
-                for (id, owner) in expectedOwner {
-                    #expect(result.regionOwner[id] == owner,
-                        "\(folder): vendor continuity overrode structural ownership on device \(id)")
-                }
-            }
+            // No vendor pass exists any more, so ownership must equal the
+            // oracle's on every chain, fully matched or not.
+            #expect(result.regionOwner == expectedOwner,
+                "\(folder): ownership differs from the evidence-only re-derivation")
 
             // No mark may sit under another mark for the same chain device: that
             // is the duplicate-subtree bug above, and it is only detectable here
@@ -847,84 +772,6 @@ struct ChainAttributionProbeSweepTests {
                 }
             }
 
-            // 5. The conflict guard: a hub two chain devices both name is marked
-            // for neither. Detected by finding a hub with two distinct claims.
-            //
-            // Claims are grouped by their `claimTarget` REDIRECTION, not
-            // unconditionally against the parent hub: a device whose claim
-            // stays on itself (the #493 block firing) was never a claim on
-            // the hub to begin with, and grouping it there anyway is the same
-            // unconditional-promotion assumption the #493 fix removed from
-            // production, just reintroduced here. Two Codex-review findings
-            // landed on this exact spot for that reason.
-            //
-            // The two match strengths are kept SEPARATE, not unioned into one
-            // claim set: production runs the exact pass first and lets its
-            // ownership stand, then folds affiliate matches in only where
-            // they do NOT contradict what the exact pass already established
-            // (see `marks(from:)`'s affiliate filter in production and in
-            // `structuralMarks` above). Unioning the two here (an earlier
-            // version of this oracle did, with a comment claiming production
-            // "unions them", which is wrong) asserted a hub unowned whenever
-            // ANY exact claim disagreed with ANY affiliate claim on it, even
-            // though production keeps the exact owner and silently drops the
-            // conflicting affiliate one in that case. A conflict WITHIN the
-            // exact pass (two distinct exact-matched chain devices naming the
-            // same hub) always leaves it unowned, matching the original
-            // shared-hub guard. A conflict WITHIN the affiliate pass only
-            // leaves it unowned when no exact claim already won there first.
-            let byLocation = Dictionary(devices.map { ($0.locationID, $0) }, uniquingKeysWith: { a, _ in a })
-            var exactClaimsPerHub: [UInt64: Set<Int64>] = [:]
-            var affiliateClaimsPerHub: [UInt64: Set<Int64>] = [:]
-            for device in devices {
-                guard let product = device.productName, Self.normalise(product).count >= 3 else { continue }
-                let named = chainNodes.filter { Self.normalise($0.sw.modelName).count >= 3 }
-                let exact = named.filter { Self.normalise($0.sw.modelName) == Self.normalise(product) }
-                let isExact = !exact.isEmpty
-                let matching = isExact ? exact : named.filter { Self.wordRunMatch(product, $0.sw.modelName) }
-                guard matching.count == 1, let switchID = matching.first?.sw.id else { continue }
-                let (target, effectiveSwitchID) = Self.claimTarget(
-                    device, claimedBy: switchID,
-                    chain: chainNodes, byLocation: byLocation
-                )
-                guard target != device.id else { continue }
-                if isExact {
-                    exactClaimsPerHub[target, default: []].insert(effectiveSwitchID)
-                } else {
-                    affiliateClaimsPerHub[target, default: []].insert(effectiveSwitchID)
-                }
-            }
-
-            func assertUnowned(_ hubID: UInt64, claimCount: Int) {
-                conflictGuardFired += 1
-                #expect(result.regionRoots[hubID] == nil,
-                    "\(folder): hub \(hubID) is named by \(claimCount) chain devices and must belong to none of them")
-                // And nothing under it may be claimed either. The test for that
-                // is deliberately "unowned, or owned via a mark the STRUCTURAL
-                // re-derivation also produced": accepting any mark at all would
-                // let a vendor-derived one satisfy it, which is the very thing
-                // being guarded against, since a device under a disputed hub is
-                // inside one of the two contenders and nothing says which.
-                for node in flat where node.device.id == hubID {
-                    for child in USBDeviceNode.flatten(node.children) {
-                        #expect(result.regionOwner[child.device.id] == nil
-                                || structural[child.device.id] != nil,
-                            "\(folder): device \(child.device.id) was claimed under a hub that belongs to nobody")
-                    }
-                }
-            }
-
-            for (hubID, claims) in exactClaimsPerHub where claims.count > 1 {
-                assertUnowned(hubID, claimCount: claims.count)
-            }
-            for (hubID, claims) in affiliateClaimsPerHub where claims.count > 1 {
-                // Skip when a single (uncontested) exact claim already won
-                // this hub: production keeps that owner and just drops the
-                // conflicting affiliate claims, it does not become unowned.
-                guard (exactClaimsPerHub[hubID]?.count ?? 0) != 1 else { continue }
-                assertUnowned(hubID, claimCount: claims.count)
-            }
-
             placedEndpoints += flat.filter { !$0.device.isHub && result.regionOwner[$0.device.id] != nil }.count
 
             // Named pins. Folder suffix letters are positional, so these are
@@ -932,8 +779,8 @@ struct ChainAttributionProbeSweepTests {
             // changes, rather than asserted blind.
             if folder == "m4_macos26.5.2_x", chainNodes.count == 2 {
                 pins["m4_macos26.5.2_x"] = "marks=\(result.regionRoots.count) absorbed=\(result.absorbed.count)"
-                #expect(result.regionRoots.isEmpty,
-                    "m4_macos26.5.2_x: both chain devices name endpoints on one hub, so nothing may be marked")
+                #expect(Set(result.regionRoots.keys) == result.absorbed,
+                    "m4_macos26.5.2_x: both chain devices name endpoints on one hub, so only the two endpoints themselves are marked")
             }
             if folder == "m5_macos26.5.1_p", chainNodes.count == 2 {
                 let lan = devices.first { $0.productName?.contains("10_100_1000 LAN") == true }
@@ -971,9 +818,15 @@ struct ChainAttributionProbeSweepTests {
                     let laCieDevices = devices.filter {
                         $0.tunnelBridgeDepth != nil && $0.productName?.hasPrefix("1big Dock") == true
                     }
+                    // In this sweep the OWC Express sits at the LaCie's depth
+                    // and the tunnel set is read from bridge depths, so the
+                    // depth join cannot single the LaCie out, and "1big Dock..."
+                    // only partly matches its model. With evidence only these
+                    // devices may be unplaced, but never in another box.
                     for device in laCieDevices {
-                        #expect(result.regionOwner[device.id] == laCieSwitch.sw.id,
-                            "\(folder): '\(device.productName ?? "?")' should structurally join the LaCie switch")
+                        let owner = result.regionOwner[device.id]
+                        #expect(owner == nil || owner == laCieSwitch.sw.id,
+                            "\(folder): '\(device.productName ?? "?")' must never be placed outside the LaCie")
                     }
                 }
             }
@@ -985,7 +838,7 @@ struct ChainAttributionProbeSweepTests {
         // #493 added the first two tracked probe-29 fixtures
         // (m3pro_macos27.0_l / _m, for the regression test below), so a
         // fresh clone or worktree now sweeps those two and nothing else.
-        // Per-folder invariants (checks 1-5 in the loop above) still run
+        // Per-folder invariants (checks 1-4 in the loop above) still run
         // against whatever is on disk, because those are correctness
         // properties that hold regardless of corpus size. The floors right
         // below make a claim about the FULL corpus, not "whatever happens to
@@ -998,9 +851,9 @@ struct ChainAttributionProbeSweepTests {
             skipped (2+ chains, port unknowable): \(skippedMultiChain)
               chain devices: \(chainDevices), multi-device chains: \(multiDeviceChains)
               fully matched: \(allAnchoredChains) chains, of which multi-device: \(multiDeviceAllAnchored)
-              marks: \(marks) (vendor-derived: \(vendorMarks)), absorbed: \(absorbedTotal), \
+              marks: \(marks) (not re-derived: \(vendorMarks)), absorbed: \(absorbedTotal), \
             endpoints placed: \(placedEndpoints)
-              conflict guard fired on \(conflictGuardFired) hub(s), affiliate marks refused: \(affiliateMarksRefused)
+              affiliate marks refused: \(affiliateMarksRefused)
               Structural join: folders with probe 37 on disk: \(foldersWithProbe37), \
             devices carrying a bridge depth: \(structurallyPlacedDevices)
               pins: \(pins)
@@ -1021,10 +874,9 @@ struct ChainAttributionProbeSweepTests {
         #expect(multiDeviceChains >= 10, "no daisy chains swept, which is the case this feature exists for")
         #expect(marks >= 20, "the structural pass placed almost nothing; it is probably broken")
         #expect(absorbedTotal >= 15, "nothing was absorbed; the exact-match rule is probably broken")
-        #expect(allAnchoredChains >= 1, "no fully matched chain, so vendor continuity was never exercised")
+        #expect(allAnchoredChains >= 1, "no fully matched chain")
         #expect(multiDeviceAllAnchored >= 1, "no fully matched DAISY chain, which is the case the whole ticket is about")
-        #expect(vendorMarks >= 1, "vendor continuity never produced a mark")
-        #expect(conflictGuardFired >= 1, "the shared-hub guard was never exercised by real data")
+        #expect(vendorMarks == 0, "production made \(vendorMarks) mark(s) the evidence re-derivation did not")
         // Deliberately NOT asserted: measured at 0 on the 2026-07-30 corpus. No
         // corpus machine has a chain device whose model name partly matches a
         // device an exact match already placed inside a DIFFERENT chain device, so
@@ -1050,6 +902,177 @@ struct ChainAttributionProbeSweepTests {
         } else {
             print("[chain attribution sweep] structural join: probe 37 not on disk anywhere in the corpus copy; structural-join half of the sweep skipped")
         }
+    }
+
+    // MARK: - Grouping against physical truth (opt-in)
+
+    /// locationID -> (idVendor, kUSBContainerID) from probe 25, the only probe
+    /// that records the Container ID; probe 38 does not.
+    private static func probe25ContainerIDs(_ text: String) -> [UInt32: (vendorID: UInt16, id: String)] {
+        var result: [UInt32: (vendorID: UInt16, id: String)] = [:]
+        var location: UInt32?
+        var vendor: UInt16?
+        var cid: String?
+        func flush() {
+            if let location, let vendor, let cid { result[location] = (vendor, cid) }
+            location = nil
+            vendor = nil
+            cid = nil
+        }
+        func value(_ line: String) -> String {
+            line.split(separator: "=", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        }
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("--- IOUSBHostDevice[") { flush(); continue }
+            if line.hasPrefix("locationID =") {
+                location = value(line).split(separator: " ").first.flatMap { UInt32($0) }
+            } else if line.hasPrefix("idVendor =") {
+                vendor = value(line).split(separator: " ").first.flatMap { UInt16($0) }
+            } else if line.hasPrefix("kUSBContainerID =") {
+                cid = value(line)
+            }
+        }
+        flush()
+        return result
+    }
+
+    /// `devices` with each one's probe-25 Container ID attached, matched by
+    /// locationID and confirmed by vendor ID.
+    private static func withContainerIDs(_ devices: [USBDevice], _ ids: [UInt32: (vendorID: UInt16, id: String)]) -> [USBDevice] {
+        devices.map { d in
+            guard let entry = ids[d.locationID], entry.vendorID == d.vendorID else { return d }
+            return USBDevice(
+                id: d.id, locationID: d.locationID, vendorID: d.vendorID, productID: d.productID,
+                vendorName: d.vendorName, productName: d.productName, serialNumber: d.serialNumber,
+                usbVersion: d.usbVersion, speedRaw: d.speedRaw, busPowerMA: d.busPowerMA, currentMA: d.currentMA,
+                busIndex: d.busIndex, controllerPortName: d.controllerPortName,
+                isThunderboltTunnelled: d.isThunderboltTunnelled, isBehindInternalHub: d.isBehindInternalHub,
+                tunnelBridgeDepth: d.tunnelBridgeDepth, tunnelRootName: d.tunnelRootName,
+                tunnelCarrier: d.tunnelCarrier, tunnelControllerRegistryPath: d.tunnelControllerRegistryPath,
+                tunnelAncestorEntryIDs: d.tunnelAncestorEntryIDs, deviceClass: d.deviceClass,
+                ioClassName: d.ioClassName, billboard: d.billboard, containerID: entry.id,
+                rawProperties: d.rawProperties
+            )
+        }
+    }
+
+    /// Each chain switch's adapters, rebuilt from probe 29 the way
+    /// production reads them from IOKit (`IOThunderboltSwitch.ports`). Probe
+    /// 29 lists port blocks flat, with no parent switch, so they are split
+    /// into runs, a new run starting at a host interface adapter, at a change
+    /// of router Device ID, or at a change of a lane's Micro Route String,
+    /// and each run is matched to the switch with the same Device ID and
+    /// route string. A switch with no matching run, or with runs that
+    /// disagree, gets no list, which is what an unpublished list is in
+    /// production: the USB3 check never refuses on it.
+    private static func probe29Ports(_ text: String, switches: [RawSwitch]) -> [Int64: [IOThunderboltPort]] {
+        struct Run { var route: Int64?; var deviceID: Int64?; var ports: [IOThunderboltPort] }
+        var runs: [Run] = []
+        for (_, body) in blocks(text, className: "IOThunderboltPort") {
+            let type = intValue(body, "Adapter Type") ?? -1
+            let route = intValue(body, "Micro Route String")
+            let deviceID = intValue(body, "Device ID")
+            let last = runs.last
+            let startsRun = last == nil || type == 2 || deviceID != last?.deviceID
+                || (route != nil && last?.route != nil && last?.route != route)
+            if startsRun { runs.append(Run(route: route, deviceID: deviceID, ports: [])) }
+            if route != nil, runs[runs.count - 1].route == nil { runs[runs.count - 1].route = route }
+            guard type >= 0, let number = intValue(body, "Port Number") else { continue }
+            runs[runs.count - 1].ports.append(IOThunderboltPort(
+                portNumber: Int(number), socketID: nil,
+                adapterType: AdapterType.from(rawValue: UInt32(truncatingIfNeeded: type)),
+                currentSpeed: nil, currentWidth: nil, targetWidth: nil,
+                rawTargetSpeed: nil, linkBandwidthRaw: nil
+            ))
+        }
+        var result: [Int64: [IOThunderboltPort]] = [:]
+        for sw in switches where sw.depth > 0 {
+            let candidates = runs.filter { $0.deviceID == sw.deviceID && $0.route == sw.routeString }
+            // Probe 29 can list a switch's ports twice (once per host-root
+            // walk). Duplicates must agree exactly, or the switch gets no list.
+            let lists = Set(candidates.map { $0.ports.map { "\($0.portNumber):\($0.adapterType)" } })
+            guard lists.count == 1, let run = candidates.first else { continue }
+            result[sw.entryID] = run.ports
+        }
+        return result
+    }
+
+    /// The acceptance gate for evidence-only grouping, replayed over the
+    /// corpus with Container IDs fed from probe 25. Opt-in: the truth table
+    /// is a private, hand-checked file outside this repo, named by
+    /// `WC_CHAIN_TRUTH` (tab-separated, header row, columns folder, id, ...,
+    /// physical in column 8 as `B0`, `B1` or `B0|B1`). Boxes are numbered in
+    /// chain order, B0 the first hop. Every chain switch counts as
+    /// USB-tunnelled, the convention the truth was scored under. Each box
+    /// carries its adapters from probe 29 (`probe29Ports`), so the USB3
+    /// check on identity claims sees what production sees.
+    ///
+    /// Right: the device's box is its only physical box. Wrong: a box it is
+    /// not in. Ungrouped devices are neither: they render in the port's
+    /// separate section.
+    @Test("Grouping gate: no device in a wrong box, at least the floor in the right one (set WC_CHAIN_TRUTH)")
+    func groupingAgainstPhysicalTruth() throws {
+        guard let truthPath = ProcessInfo.processInfo.environment["WC_CHAIN_TRUTH"] else { return }
+        let floor = ProcessInfo.processInfo.environment["WC_CHAIN_RIGHT_FLOOR"].flatMap(Int.init) ?? 883
+        var truth: [String: [Int: Set<String>]] = [:]
+        for line in try String(contentsOfFile: truthPath, encoding: .utf8).split(separator: "\n").dropFirst() {
+            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard f.count >= 8, let id = Int(f[1]) else { continue }
+            truth[f[0], default: [:]][id] = Set(f[7].split(separator: "|").map(String.init))
+        }
+        try #require(!truth.isEmpty, "the truth file at \(truthPath) has no rows")
+
+        var right = 0, wrong = 0, unknown = 0, ungrouped = 0, scored = 0
+        var boxes = 0, boxesWithPorts = 0
+        var wrongRows: [String] = []
+        for folder in Self.folders() {
+            guard let rows = truth[folder],
+                  let text29 = Self.probeText(folder, "29_usb4_router_interfaces.json"),
+                  let text38 = Self.probeText(folder, "38_usb_device_tree.json")
+            else { continue }
+            let raws = Self.rawSwitches(text29)
+            let allChains = Self.chains(raws, ports: Self.probe29Ports(text29, switches: raws))
+            var devices = Self.usbDevices(text38)
+            guard allChains.count == 1, !devices.isEmpty else { continue }
+            if let text37 = Self.probeText(folder, "37_tb_tunnel_port_map.json") {
+                let depths = Self.probe37BridgeDepths(text37)
+                if !depths.isEmpty { devices = Self.applyBridgeDepths(devices, depths) }
+            }
+            if let text25 = Self.probeText(folder, "25_usb_bos_descriptor.json") {
+                devices = Self.withContainerIDs(devices, Self.probe25ContainerIDs(text25))
+            }
+            let chain = allChains[0]
+            let chainNodes = ThunderboltTopology.flatten(chain)
+            let label = Dictionary(uniqueKeysWithValues: chainNodes.enumerated().map { ($1.sw.id, "B\($0)") })
+            boxes += chainNodes.count
+            boxesWithPorts += chainNodes.filter { !$0.sw.ports.isEmpty }.count
+            let result = ChainDeviceAttribution.resolve(
+                chain: chain,
+                forest: USBDeviceNode.buildTree(from: devices),
+                usbTunnelSwitchUIDs: Set(chainNodes.map(\.sw.id))
+            )
+            for device in devices {
+                guard let physical = rows[Int(device.id)] else { continue }
+                scored += 1
+                guard let box = result.regionOwner[device.id].flatMap({ label[$0] }) else { ungrouped += 1; continue }
+                if physical == [box] {
+                    right += 1
+                } else if physical.contains(box) {
+                    unknown += 1
+                } else {
+                    wrong += 1
+                    wrongRows.append("\(folder) id \(device.id) in \(box), physically \(physical.sorted())")
+                }
+            }
+        }
+        print("[grouping gate] scored \(scored), right \(right), wrong \(wrong), can't tell \(unknown), separate tree \(ungrouped)")
+        print("[grouping gate] boxes \(boxes), with an adapter list from probe 29 \(boxesWithPorts), without (never refuse) \(boxes - boxesWithPorts)")
+        for row in wrongRows { print("[grouping gate] wrong: \(row)") }
+        #expect(scored > 0, "no truth row matched a corpus folder; the corpus is not linked or the file is wrong")
+        #expect(wrong == 0, "\(wrong) device(s) grouped in a wrong box")
+        #expect(unknown == 0, "\(unknown) device(s) grouped where the truth cannot tell")
+        #expect(right >= floor, "\(right) grouped right, below the floor of \(floor)")
     }
 
     // MARK: - Regression: issue #493
@@ -1144,10 +1167,9 @@ struct ChainAttributionProbeSweepTests {
 
         // Positive: the CalDigit hub's final state, asserted explicitly
         // rather than only "not the OWC". The fixed code leaves it UNOWNED,
-        // not reattributed to the CalDigit dock: the hub's vendor
-        // ("CalDigit, Inc.") matches the CalDigit dock, a DIFFERENT chain
-        // device from the OWC, so `claimTarget` refuses to promote the OWC's
-        // claim onto it, but nothing on this fabric independently claims the
+        // not reattributed to the CalDigit dock: an identity claim places
+        // only the identity device, so the OWC's claim never reaches the
+        // hub, and nothing on this fabric independently claims the
         // hub FOR the CalDigit dock either (the dock's own identity endpoint
         // sits on a different hub). An unowned hub is the file's documented
         // fail-closed behaviour: "when the evidence does not single out one

@@ -368,8 +368,15 @@ public final class USBWatcher: ObservableObject {
             deviceClass: deviceClass,
             ioClassName: ioClassName,
             billboard: billboard,
+            containerID: Self.containerID(from: dict),
             rawProperties: raw
         )
+    }
+
+    /// `kUSBContainerID` as published, unchanged. Core decides what an ID is
+    /// worth (absent, all-zero, a shared template), so nothing is filtered here.
+    nonisolated static func containerID(from dict: [String: Any]) -> String? {
+        dict["kUSBContainerID"] as? String
     }
 
     /// The property dictionary of every `AppleUSBHostBillboardDevice` nub two

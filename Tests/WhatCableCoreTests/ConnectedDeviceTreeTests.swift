@@ -239,21 +239,24 @@ struct ConnectedDeviceTreeTests {
 
     // MARK: - Thunderbolt device downstream: rooted tree
 
-    @Test("Dock present: root row names the dock with the 40 Gbps link, USB depths shift by one")
+    @Test("Dock present, nothing places its devices: they sit under the port's other-devices heading")
     func dockRootRow() throws {
+        // No evidence ties either device to the dock, so they are not drawn
+        // inside it: the heading is a peer of the dock row, not a child.
         let rows = ConnectedDeviceTree.rows(
             devices: hubAndChild,
             port: makePort(),
             thunderboltSwitches: [hostRoot(), dockSwitch()],
             displayPorts: []
         )
-        try #require(rows.count == 3)
+        try #require(rows.count == 4)
         #expect(rows[0] == ConnectedDeviceTree.Row(
             label: "Ugreen Group Limited TBT5 Docking Station 10-in-1 - Thunderbolt link active at 40 Gbps",
             depth: 0
         ))
-        #expect(rows[1].depth == 1 && rows[1].label.hasPrefix("USB3 HUB"))
-        #expect(rows[2].depth == 2 && rows[2].label.hasPrefix("USB 10_100_1000 LAN"))
+        #expect(rows[1] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0))
+        #expect(rows[2].depth == 1 && rows[2].label.hasPrefix("USB3 HUB"))
+        #expect(rows[3].depth == 2 && rows[3].label.hasPrefix("USB 10_100_1000 LAN"))
     }
 
     @Test("TB5 dual-lane link labels 80 Gbps")
@@ -388,9 +391,10 @@ struct ConnectedDeviceTreeTests {
             thunderboltSwitches: [hostRoot(), dockSwitch()],
             displayPorts: [displayPort(productName: "LEN G34w-10")]
         )
-        try #require(rows.count == 4)
+        try #require(rows.count == 5)
         #expect(rows[1] == ConnectedDeviceTree.Row(label: "Display: LEN G34w-10", depth: 1))
-        #expect(rows[2].label.hasPrefix("USB3 HUB"), "USB branch must follow the display row")
+        #expect(rows[2] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0), "the unplaced USB devices follow the display, under their own heading")
+        #expect(rows[3].label.hasPrefix("USB3 HUB"))
     }
 
     @Test("Two monitors: one row each")
@@ -670,7 +674,8 @@ struct ConnectedDeviceTreeTests {
         let root = try #require(rows.first)
         #expect(root.device == nil, "the Thunderbolt root row is not a USB device")
 
-        let deviceRows = rows.dropFirst()
+        #expect(rows[1] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0), "unplaced devices sit under the other-devices heading")
+        let deviceRows = rows.filter { $0.device != nil }
         try #require(deviceRows.count == 2)
         #expect(deviceRows.allSatisfy { $0.device != nil })
         #expect(deviceRows.allSatisfy { $0.depth >= 1 }, "shifted under the root")
@@ -693,23 +698,25 @@ struct ConnectedDeviceTreeTests {
             thunderboltSwitches: [hostRoot(), dockSwitch()], displayPorts: []
         )
 
-        try #require(rows.count == 6, "root + 2 headers + 3 devices")
-        // Thunderbolt root, then each bus header one level under it, with the
-        // hub's child one level deeper again than the hub.
+        try #require(rows.count == 7, "root + other-devices heading + 2 bus headers + 3 devices")
+        // Thunderbolt root, the heading beside it (nothing places these
+        // devices in the dock), then each bus header one level under the
+        // heading, with the hub's child one level deeper again than the hub.
         #expect(rows[0].depth == 0)
         #expect(rows[0].device == nil, "the root is the dock, not a USB device")
+        #expect(rows[1] == ConnectedDeviceTree.Row(label: "Other USB devices on this port", depth: 0))
 
-        #expect(rows[1].label.hasPrefix("USB bus"))
-        #expect(rows[1].depth == 1)
-        #expect(rows[2].label.hasPrefix("USB3 HUB"))
-        #expect(rows[2].depth == 2)
-        #expect(rows[3].label.hasPrefix("LAN"))
-        #expect(rows[3].depth == 3, "hub child keeps its extra level under both shifts")
+        #expect(rows[2].label.hasPrefix("USB bus"))
+        #expect(rows[2].depth == 1)
+        #expect(rows[3].label.hasPrefix("USB3 HUB"))
+        #expect(rows[3].depth == 2)
+        #expect(rows[4].label.hasPrefix("LAN"))
+        #expect(rows[4].depth == 3, "hub child keeps its extra level under both shifts")
 
-        #expect(rows[4].label.hasPrefix("USB bus"))
-        #expect(rows[4].depth == 1, "second header sits at the same level as the first")
-        #expect(rows[5].label.hasPrefix("Shure MV7"))
-        #expect(rows[5].depth == 2)
+        #expect(rows[5].label.hasPrefix("USB bus"))
+        #expect(rows[5].depth == 1, "second header sits at the same level as the first")
+        #expect(rows[6].label.hasPrefix("Shure MV7"))
+        #expect(rows[6].depth == 2)
 
         // No row may end up deeper than its own hub nesting plus the two
         // structural shifts, which is what a double-indent bug would look like.

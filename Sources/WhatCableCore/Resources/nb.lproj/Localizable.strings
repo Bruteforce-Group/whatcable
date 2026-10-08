@@ -128,6 +128,7 @@
 "Connected device: %@" = "Tilkoblet enhet: %@";
 "Connected device: another Mac" = "Tilkoblet enhet: en annen Mac";
 "USB link only" = "Bare USB-tilkobling";
+"Other USB devices on this port" = "Andre USB-enheter på denne porten";
 "Connected device: %@, %@ (%@)" = "Tilkoblet enhet: %1$@, %2$@ (%3$@)";
 "Data" = "Data";
 "DisplayPort Alt Mode" = "DisplayPort alternativ modus";

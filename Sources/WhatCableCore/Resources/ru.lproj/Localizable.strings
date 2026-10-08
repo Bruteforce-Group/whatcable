@@ -140,6 +140,7 @@
 "Connected device: %@" = "Подключённое устройство: %@";
 "Connected device: another Mac" = "Подключённое устройство: другой Mac";
 "USB link only" = "Только USB-соединение";
+"Other USB devices on this port" = "Другие USB-устройства на этом порту";
 "Connected device: %@, %@ (%@)" = "Подключённое устройство: %1$@, %2$@ (%3$@)";
 "Data" = "Данные";
 "DisplayPort Alt Mode" = "Режим DisplayPort Alt Mode";

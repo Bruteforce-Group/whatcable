@@ -14,6 +14,10 @@ import Foundation
 /// tunnel), so each connected monitor gets a row directly under the root,
 /// before the USB branch.
 ///
+/// A USB device sits under a box only when `ChainDeviceAttribution` has
+/// evidence for it. Every other device on the port goes in a separate
+/// section headed "Other USB devices on this port", never under the first box.
+///
 /// Pure logic, no IOKit. Shared by the menu bar app and the CLI text output
 /// so both render identical rows. JSON output is deliberately unchanged: it
 /// already carries the Thunderbolt fabric and the USB device tree as
@@ -209,14 +213,17 @@ public enum ConnectedDeviceTree {
         // shows the first hop only, which is what it does today.
         guard chain.count == 1, chainNodes.count > 1 || !attribution.isEmpty else {
             var rows = [chainRow(for: chainNodes[0], in: thunderboltSwitches)]
-            rows.append(contentsOf: displays)
-            // Shift the device rows one level to sit under the Thunderbolt root,
-            // carrying `device` across. Dropping it here would make the
-            // expandable detail work everywhere except behind a dock, which is
-            // where the device tree is longest and the detail is most wanted.
-            rows.append(contentsOf: deviceRowsGroupedByBus(allDevices, hubs: hubs).map {
+            rows.append(contentsOf: displays.rows)
+            // Nothing placed any device in the box, so they all go in the
+            // separate section, one level under its heading, carrying `device`
+            // across so the expandable detail still works there.
+            let otherRows = deviceRowsGroupedByBus(allDevices, hubs: hubs).map {
                 Row(label: $0.label, depth: $0.depth + 1, device: $0.device)
-            })
+            }
+            if !otherRows.isEmpty {
+                rows.append(otherDevicesHeader())
+                rows.append(contentsOf: otherRows)
+            }
             return rows
         }
 
@@ -242,15 +249,18 @@ public enum ConnectedDeviceTree {
             for child in node.children { parentOf[child.device.id] = node.device.id }
         }
 
+        // A display row that names its video tunnel sits under the box that
+        // tunnel ends at. Any other display row stays under the first hop:
+        // `IOPortTransportStateDisplayPort` shares no key with the fabric, so
+        // without the tunnel there is nothing to place it by.
+        let displayOwnerIndex = displays.videoSwitchUID
+            .flatMap { uid in chainNodes.firstIndex { $0.sw.id == uid } } ?? 0
         var rows: [Row] = []
         for (index, node) in chainNodes.enumerated() {
             rows.append(chainRow(for: node, in: thunderboltSwitches))
-            // Displays stay at depth 1 under the first hop, where they render
-            // today, and are deliberately NOT attributed to a deeper chain
-            // device: `IOPortTransportStateDisplayPort` is joined to a port by
-            // HPM port number and shares no key with the fabric, so there is
-            // nothing to attribute them with.
-            if index == 0 { rows.append(contentsOf: displays) }
+            if index == displayOwnerIndex {
+                rows.append(contentsOf: displays.rows.map { Row(label: $0.label, depth: node.depth + 1) })
+            }
             rows.append(contentsOf: groupRows(
                 owner: node.sw.id,
                 depth: node.depth + 1,
@@ -263,12 +273,12 @@ public enum ConnectedDeviceTree {
                 annotateHops: false
             ))
         }
-        // Whatever could not be placed goes last, at depth 1 under the first
-        // hop: exactly where it renders today. The hop count stays on these
+        // Whatever no evidence places goes last, in its own section, so it
+        // never reads as inside the first box. The hop count stays on these
         // rows because nothing else on them says how far away the device is.
-        // This is also the port-level group Stage B v2's `portLevelBoundaries`
-        // devices render from (see `groupRows`'s nil-owner branch).
-        rows.append(contentsOf: groupRows(
+        // This is also where Stage B v2's `portLevelBoundaries` devices render
+        // (see `groupRows`'s nil-owner branch).
+        let otherRows = groupRows(
             owner: nil,
             depth: 1,
             forest: forest,
@@ -278,8 +288,19 @@ public enum ConnectedDeviceTree {
             attribution: attribution,
             hubs: hubs,
             annotateHops: true
-        ))
+        )
+        if !otherRows.isEmpty {
+            rows.append(otherDevicesHeader())
+            rows.append(contentsOf: otherRows)
+        }
         return rows
+    }
+
+    /// Heads the port's devices that no evidence places inside a box. Depth 0
+    /// and no `device`, like a box row, so both renderers draw it as a peer of
+    /// the boxes rather than as something inside one.
+    private static func otherDevicesHeader() -> Row {
+        Row(label: String(localized: "Other USB devices on this port", bundle: _coreLocalizedBundle), depth: 0)
     }
 
     /// Rows for one chain device's group of USB devices, or for the leftovers
@@ -408,7 +429,8 @@ public enum ConnectedDeviceTree {
         return result
     }
 
-    /// The display rows for a port: one per connected monitor, at depth 1.
+    /// The display rows for a port: one per connected monitor, at depth 1,
+    /// plus the switch the video tunnel ends at when a row names that tunnel.
     ///
     /// "Display: <name> · video output N" suffix (Phase B of the TB link
     /// tree root project): only when the port has exactly one connected
@@ -429,17 +451,21 @@ public enum ConnectedDeviceTree {
         displayPorts: [IOPortTransportStateDisplayPort],
         hostRoot: IOThunderboltSwitch,
         switches: [IOThunderboltSwitch]
-    ) -> [Row] {
+    ) -> (rows: [Row], videoSwitchUID: Int64?) {
         let videoTunnels = ActiveTunnelPresentation.crossCableTunnels(
             ThunderboltTopology.tunnels(from: hostRoot, in: switches),
             switches: switches
         ).filter { $0.kind == .video && $0.terminalAdapterPortNumber != nil }
-        let soleVideoOutputAdapter: Int? = (displayPorts.count == 1 && videoTunnels.count == 1)
-            ? videoTunnels[0].terminalAdapterPortNumber
+        let soleVideoTunnel: TunnelPath? = (displayPorts.count == 1 && videoTunnels.count == 1)
+            ? videoTunnels[0]
             : nil
 
-        return displayPorts.map { dp in
-            if let adapterNumber = soleVideoOutputAdapter, let name = displayName(for: dp) {
+        var videoSwitchUID: Int64?
+        let rows = displayPorts.map { dp -> Row in
+            if let tunnel = soleVideoTunnel, let adapterNumber = tunnel.terminalAdapterPortNumber,
+               let name = displayName(for: dp) {
+                // Only a row that names its tunnel can follow it to a box.
+                videoSwitchUID = tunnel.terminalSwitchUID
                 return Row(
                     label: String(localized: "Display: \(name) \u{00B7} video output \(adapterNumber)", bundle: _coreLocalizedBundle),
                     depth: 1
@@ -447,6 +473,7 @@ public enum ConnectedDeviceTree {
             }
             return Row(label: displayLabel(for: dp), depth: 1)
         }
+        return (rows, videoSwitchUID)
     }
 
     /// Device rows, grouped under a header per USB controller when the port

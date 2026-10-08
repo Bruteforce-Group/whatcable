@@ -18,38 +18,34 @@ import Foundation
 /// device, the device stays unattributed and renders exactly where it does
 /// today.** A wrong parent is worse than a flat list.
 ///
-/// Three signals, in order of strength:
+/// Evidence only. A device is grouped under a box when one of these places it,
+/// and never otherwise:
 ///
-/// 1. **The name match.** A Thunderbolt device usually exposes its own USB
-///    identity endpoint, and its `USB Product Name` is the same string the
-///    fabric reports as `Device Model Name`. `TBT5 Docking Station 10-in-1`
-///    appears in both. Two strengths of match, and the difference matters:
-///    - **exact** (normalised equality): this device IS the chain device, so it
-///      is absorbed into the chain row rather than rendered twice.
-///    - **affiliate** (one name's words are a contiguous run inside the
-///      other's): this device is PART OF the chain device. `TS5 USB 3 Hub` and
-///      `CalDigit TS5 Audio - Rear` against a chain device modelled `TS5`;
-///      `Apple Thunderbolt Display` against `Thunderbolt Display`. It marks its
-///      hub but is never absorbed, because deleting a dock's audio endpoint
-///      from the tree would be a bug, not a de-duplication.
-///    Either way, the hub the device hangs off is that chain device's own
-///    upstream hub, so everything under that hub is inside it.
-/// 2. **Inheritance (structural).** Walking down the USB forest, a device takes
-///    its nearest marked ancestor's owner. This is what separates a chained
-///    dock's subtree from the display's while it sits nested inside it.
-/// 3. **Vendor continuity (weakest, and heavily gated).** A device whose vendor
-///    appears in exactly one chain device's marked region probably belongs to
-///    that chain device. Applied top-down as a region mark, not per device, for
-///    two reasons: it keeps a hub and its children together, and it makes the
-///    collapsed and expanded views agree about where a device sits. An earlier
-///    draft resolved it per endpoint in the collapsed view only, which put the
-///    reference machine's Ethernet adapter under the dock by default and
-///    somewhere else entirely once the user clicked "Show hubs".
+/// 1. **Thunderbolt position.** The TB5 tunnel-hub map (route rule), the
+///    USB-tunnel depth join and the PCIe Stage A and B joins.
+/// 2. **USB2 pairing.** Each box's top USB2 hub, by position and a Container
+///    ID only that box's structurally placed USB3 side carries.
+/// 3. **The box's own identity device.** A USB device whose name equals the
+///    box's model name exactly, or whose idVendor/idProduct equal the box's
+///    DROM vendor/model numbers (the numbers win when the two disagree).
+///
+/// Identity evidence places only the identity device itself (`identityMark`
+/// in `resolve`). It never passes the box on to a parent hub, and an identity
+/// device that is itself a hub is not marked unless position evidence already
+/// places that hub in the same box. Hubs, and everything under them, are
+/// grouped by position evidence alone. A device whose own position and own
+/// identity disagree is placed by neither and renders at port level.
+///
+/// Below a marked node, devices inherit its box down the forest, stopping at
+/// the next mark. Anything nothing places stays unattributed and
+/// `ConnectedDeviceTree` draws it in the port's separate "other devices"
+/// section. Partial name matches and vendor IDs group nothing: in the corpus
+/// they were behind most wrong groupings.
 ///
 /// Pure logic, no IOKit. `ConnectedDeviceTree` is the only caller.
 public struct ChainDeviceAttribution: Equatable {
-    /// USB device id -> chain switch id: every device the three signals could
-    /// place, hubs included. Both view modes read this, so they cannot disagree
+    /// USB device id -> chain switch id: every device the evidence places,
+    /// hubs included. Both view modes read this, so they cannot disagree
     /// about which chain device something is inside.
     public let regionOwner: [UInt64: Int64]
 
@@ -62,9 +58,8 @@ public struct ChainDeviceAttribution: Equatable {
     /// is a good part of why the tree reads as a tangle today.
     public let absorbed: Set<UInt64>
 
-    /// True when every chain device was anchored. Gates vendor continuity: see
-    /// the `resolve` implementation for why a partial anchor set makes vendor
-    /// evidence meaningless rather than merely weak.
+    /// True when every chain device holds at least one region. Reported for
+    /// the corpus sweep; it gates nothing.
     public let allAnchored: Bool
 
     /// Stage B v2 (PCI Path prefix join): USB device ids the join resolved to
@@ -288,10 +283,14 @@ public struct ChainDeviceAttribution: Equatable {
         // sole trigger"), for silicon that does publish it.
         let confirmedTunnelSwitchCount = chainNodes.filter { usbTunnelSwitchUIDs.contains($0.sw.id) }.count
         let sharedControllerShape = confirmedTunnelSwitchCount >= 2
+        // One box on its own, its USB tunnel confirmed by the fabric: the walk
+        // below reduces to that box claiming the one top candidate hub.
+        // Without this a JHL9580 dock alone never reaches the pass.
+        let loneConfirmedBox = chainNodes.count == 1 && confirmedTunnelSwitchCount == 1
         let genTAdapterPresent = chainNodes.contains { node in
             node.sw.ports.contains { $0.adapterType == .usbGenTUp }
         }
-        guard sharedControllerShape || genTAdapterPresent else { return nil }
+        guard sharedControllerShape || loneConfirmedBox || genTAdapterPresent else { return nil }
 
         // 3.2 Candidate tunnel hubs: Intel known-silicon VID/PID, positioned
         // either at the top of this port's USB forest or directly under
@@ -455,6 +454,99 @@ public struct ChainDeviceAttribution: Equatable {
         return result
     }
 
+    // MARK: - USB2 top hubs by position and Container ID
+
+    /// The comparable form of a published Container ID, or nil when there is
+    /// nothing to pair on. macOS publishes the all-zero UUID for a device that
+    /// declares none, so it means absent, not shared.
+    static func containerIDKey(_ raw: String?) -> String? {
+        guard let key = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !key.isEmpty,
+              key != "00000000-0000-0000-0000-000000000000"
+        else { return nil }
+        return key
+    }
+
+    /// USB2 hub id -> chain switch id: each box's top USB2 hub, found box by
+    /// box in chain order. A hub's USB2 and USB3 halves are separate USB
+    /// devices sharing one Container ID, and only the USB3 half sits where
+    /// the structural pass can place it. A box's top USB2 hub sits directly
+    /// under the top USB2 hub of the box above it (directly under the USB
+    /// root for a first box) and carries an ID that one of the box's owned
+    /// USB3-side devices carries and no other box's does. No list of IDs is
+    /// needed: an ID two boxes share is dropped from both.
+    ///
+    /// An ID qualifies a box only if no USB3-side device owned by another box
+    /// on the chain carries it: a shared ID identifies neither box.
+    ///
+    /// All or nothing: exactly one hub must qualify for every box. If any box
+    /// gets none, two, or one `accepts` refuses, the result is empty and the
+    /// USB2 side renders as it does today. A partial answer would leave the
+    /// unpaired box's USB2 devices inside the box above it.
+    ///
+    /// Side is the device's own speed: a USB2-only device in a USB3 socket
+    /// enumerates on the hub's USB2 half, so speed and side cannot disagree.
+    static func resolveUSB2HubPairing(
+        chainNodes: [IOThunderboltSwitchNode],
+        forest: [USBDeviceNode],
+        usb3Owner: [UInt64: Int64],
+        accepts: (_ hubID: UInt64, _ switchID: Int64) -> Bool = { _, _ in true }
+    ) -> [UInt64: Int64] {
+        var nodeByID: [UInt64: USBDeviceNode] = [:]
+        var keysByBox: [Int64: Set<String>] = [:]
+        for node in USBDeviceNode.flatten(forest) {
+            nodeByID[node.device.id] = node
+            guard (node.device.speedRaw ?? 0) >= 3,
+                  let key = containerIDKey(node.device.containerID),
+                  let owner = usb3Owner[node.device.id]
+            else { continue }
+            keysByBox[owner, default: []].insert(key)
+        }
+
+        let chainIDs = Set(chainNodes.map(\.sw.id))
+        var hubForBox: [Int64: UInt64] = [:]
+        var result: [UInt64: Int64] = [:]
+        // `chainNodes` is a preorder walk, so a box's parent is settled first.
+        for box in chainNodes {
+            let position: [USBDeviceNode]
+            if let parentUID = box.sw.parentSwitchUID, chainIDs.contains(parentUID) {
+                guard let parentHubID = hubForBox[parentUID], let parentHub = nodeByID[parentHubID] else { return [:] }
+                position = parentHub.children
+            } else {
+                position = forest
+            }
+            // An ID another box's USB3 side also carries identifies neither box.
+            var keys = keysByBox[box.sw.id] ?? []
+            for (other, otherKeys) in keysByBox where other != box.sw.id { keys.subtract(otherKeys) }
+            let qualifying = position.filter { node in
+                guard node.device.isHub, let speed = node.device.speedRaw, speed <= 2,
+                      let key = containerIDKey(node.device.containerID)
+                else { return false }
+                return keys.contains(key)
+            }
+            guard qualifying.count == 1, let hub = qualifying.first, accepts(hub.device.id, box.sw.id) else { return [:] }
+            hubForBox[box.sw.id] = hub.device.id
+            result[hub.device.id] = box.sw.id
+        }
+        return result
+    }
+
+    // MARK: - USB3 check on identity claims
+
+    /// True when `device` cannot be `box`'s identity device: it enumerated
+    /// at SuperSpeed or faster, and the box publishes adapters but no USB3
+    /// one. A device carried over a PCIe tunnel is exempt, since Thunderbolt
+    /// 3 docks carry their USB that way and publish no USB3 adapter. An empty
+    /// adapter list is no evidence either way, so it never refuses.
+    static func usb3CheckRefuses(_ device: USBDevice, box: IOThunderboltSwitch) -> Bool {
+        guard (device.speedRaw ?? 0) >= 3,
+              device.tunnelCarrier != .pcieTunnel,
+              !box.ports.isEmpty
+        else { return false }
+        let usb3Adapters: Set<AdapterType> = [.usb3Down, .usb3Up, .usbGenTDown, .usbGenTUp]
+        return !box.ports.contains { usb3Adapters.contains($0.adapterType) }
+    }
+
     // MARK: - Resolution
 
     /// - Parameters:
@@ -554,29 +646,16 @@ public struct ChainDeviceAttribution: Equatable {
         }
 
         var exact: [UInt64: Int64] = [:]
-        var affiliates: [UInt64: Int64] = [:]
         for node in allNodes {
             guard let product = node.device.productName else { continue }
             let key = normalized(product)
             guard key.count >= 3 else { continue }
-            if let ids = switchIDsByName[key] {
-                // Two chain devices with the same model name (two identical
-                // daisy-chained displays: "UltraFine 4K" twice in the corpus)
-                // cannot be told apart by name, so neither is matched.
-                if ids.count == 1, let id = ids.first { exact[node.device.id] = id }
-                continue
+            // Two chain devices with the same model name (two identical
+            // daisy-chained displays: "UltraFine 4K" twice in the corpus)
+            // cannot be told apart by name, so neither is matched.
+            if let ids = switchIDsByName[key], ids.count == 1, let id = ids.first {
+                exact[node.device.id] = id
             }
-            // Word-run containment, either direction, which is what catches the
-            // families exact equality misses: CalDigit's entire TS line reports
-            // `TS5` in the DROM and never once as a bare USB product name, so
-            // without this it can never be recognised at all. Matching on whole
-            // words rather than raw substrings keeps `TS5` out of an unrelated
-            // `ATS5000`.
-            let soft = chainNodes.filter {
-                let model = normalized($0.sw.modelName)
-                return model.count >= 3 && affiliated(product: product, model: $0.sw.modelName)
-            }
-            if soft.count == 1, let id = soft.first?.sw.id { affiliates[node.device.id] = id }
         }
 
         // 1b. Structural tunnel join, ahead of every OTHER name-based signal
@@ -584,9 +663,8 @@ public struct ChainDeviceAttribution: Equatable {
         // device's own exact-name or numeric identity (checked just below):
         // two strong, independent signals disagreeing means one of them is
         // wrong and this function cannot tell which, so the device fails
-        // closed to whichever of the two is the WEAKER inference to trust
-        // blindly, which is the structural one (see the precedence-safety
-        // note below).
+        // closed and neither places it (see the precedence-safety note
+        // below).
         //
         // A tunnelled USB device (`isThunderboltTunnelled`) carries
         // `tunnelBridgeDepth`: the count of PCIe bridge hops between its
@@ -649,18 +727,14 @@ public struct ChainDeviceAttribution: Equatable {
         // 3. **Precedence safety.** A device whose own exact-name match
         //    (`exact[id]`) or numeric identity (`numericIdentity(of:)`)
         //    resolves to a DIFFERENT chain device than the structural depth
-        //    lookup is left OUT of the structural pass entirely: the
-        //    name/numeric placement is kept (unaffected; it flows through
-        //    `exact` into the marks/claimTarget pipeline below exactly as it
-        //    always has), but this device is also recorded in
-        //    `structurallyConflicted` so it is EXCLUDED from `absorbed` at
-        //    the end, even though it still has a normal exact-name match: a
-        //    device that is simultaneously tunnelled at a depth pointing one
-        //    way and named toward another has produced two signals that
-        //    cannot both be right, and confidently hiding it as "IS the
-        //    chain device" would be presumptuous evidence-reading. It still
-        //    renders as its own row, nested at wherever the name/numeric
-        //    match placed it.
+        //    lookup is placed by NEITHER signal: it goes into
+        //    `forcedPortLevelIDs`, its name/numeric claim is stripped before
+        //    the marks/identityMark pipeline below, and it stops inherited
+        //    ownership for its subtree. A device tunnelled at a depth
+        //    pointing one way and named toward another has produced two
+        //    signals that cannot both be right, and placing it by either
+        //    risks putting it (and, if it is a hub, everything under it)
+        //    in the wrong box. It renders in the port's separate list.
         var depthCounts: [Int: [Int64]] = [:]
         for node in chainNodes where usbTunnelSwitchUIDs.contains(node.sw.id) {
             depthCounts[node.sw.depth, default: []].append(node.sw.id)
@@ -674,26 +748,24 @@ public struct ChainDeviceAttribution: Equatable {
         // loop) because the root-name internal-consistency fallback needs to
         // see every candidate's `tunnelRootName` before deciding whether ANY
         // of them can be trusted.
-        // Which mechanism produced a raw candidate. Only `.pcieStageBMatch`
-        // gets the STRONG contradiction rule (a name/numeric disagreement
-        // demotes the device to `forcedPortLevel`, excluded from every later
-        // pass); `.usbTunnelDepth` and `.pcieStageAShortcut` keep the
-        // existing, weaker `structurallyConflicted` rule (excluded from
-        // `absorbed` only). See the contradiction check below.
-        // `.tb5TunnelHubMap`: the route-string/USB-Port-Map join
-        // in `resolveTB5TunnelHubMap`. Same precedence tier as
-        // `.usbTunnelDepth` below (falls into the `structurallyConflicted`
-        // branch, never `forcedPortLevel`): it is an inference chain (route
-        // byte -> formula -> locationID nibble), the same strength class as
-        // the bridge-depth arithmetic, not the Stage B registry-instance
-        // proof (spec 3.5).
+        // Which mechanism produced a raw candidate. `.usbTunnelDepth`,
+        // `.tb5TunnelHubMap` (the route-string/USB-Port-Map join in
+        // `resolveTB5TunnelHubMap`) and `.pcieStageBMatch` all get the
+        // STRONG contradiction rule: a name/numeric disagreement sends the
+        // device to `forcedPortLevel`, excluded from every later pass, so
+        // neither signal places it. Only `.pcieStageAShortcut` keeps the
+        // weaker `structurallyConflicted` rule (excluded from `absorbed`
+        // only); Stage A runs only on a one-box chain, where its candidate
+        // and any identity claim name the same box. See the contradiction
+        // check below.
         enum CandidateSource { case usbTunnelDepth, pcieStageAShortcut, pcieStageBMatch, tb5TunnelHubMap }
         struct StructuralCandidate { let id: UInt64; let switchID: Int64; let rootName: String?; let source: CandidateSource }
         var rawCandidates: [StructuralCandidate] = []
-        // Stage B v2 terminal outcome (plan step 8/9): devices the PCI-Path
-        // join positively places OUTSIDE every chain switch on this port
-        // (valid-but-no-match, a tie, a stale entry ID) or whose Stage B
-        // match contradicts independent name/numeric evidence. Populated
+        // Terminal port-level outcome (Stage B v2 plan step 8/9, widened):
+        // devices the PCI-Path join positively places OUTSIDE every chain
+        // switch on this port (valid-but-no-match, a tie, a stale entry ID),
+        // or whose usbTunnel-depth, TB5 route-map or Stage B candidate
+        // contradicts independent name/numeric evidence. Populated
         // here and by the contradiction check further down; consumed by the
         // exact/affiliate filter, `descend`, `vendorDescend`, and the
         // redundant-root removal pass, all below.
@@ -752,9 +824,10 @@ public struct ChainDeviceAttribution: Equatable {
         // why that pass cannot solve this shape: see spec section 1), this
         // pass's own per-hub answer is the one `rawCandidates` processing
         // order lets win.
-        if let tb5HubMap = Self.resolveTB5TunnelHubMap(
+        let tb5HubMap = Self.resolveTB5TunnelHubMap(
             chainNodes: chainNodes, forest: forest, usbTunnelSwitchUIDs: usbTunnelSwitchUIDs
-        ) {
+        )
+        if let tb5HubMap {
             // Review fix: `tb5HubMap` is a `Dictionary`, with no defined
             // iteration order. The comment just above this block promises
             // rawCandidates processing order puts a parent before its
@@ -788,6 +861,9 @@ public struct ChainDeviceAttribution: Equatable {
 
         var structuralOwner: [UInt64: Int64] = [:]
         var structuralRoots: [UInt64: Int64] = [:]
+        // Excluded from `absorbed` only. Only a `.pcieStageAShortcut`
+        // candidate can land here now; every other conflicting source goes
+        // to `forcedPortLevelIDs` instead (see the contradiction check).
         var structurallyConflicted: Set<UInt64> = []
         // `rawCandidates` preserves `allNodes`'s pre-order (`USBDeviceNode
         // .flatten`), so a device's parent is always processed before it,
@@ -826,23 +902,45 @@ public struct ChainDeviceAttribution: Equatable {
                 guard rootIsTrusted(candidate.rootName) else { continue }
             }
             guard let node = nodeByID[candidate.id] else { continue }
+            // Terminal: once forced (by Stage B, or by an earlier candidate's
+            // conflict below), no later candidate may mark this device.
+            if forcedPortLevelIDs.contains(candidate.id) { continue }
             let namedConflict = exact[candidate.id].map { $0 != candidate.switchID } ?? false
             let numericConflict = numericIdentity(of: node.device).map { $0.sw.id != candidate.switchID } ?? false
             if namedConflict || numericConflict {
-                // Two strong, independent signals disagree. For a Stage B
-                // PCI-Path match this is the round-8/9 contradiction rule
-                // (step 8): the structural evidence is demoted all the way to
-                // `forcedPortLevel`, a TERMINAL exclusion from every later
-                // pass, not merely from `absorbed`. The name/numeric evidence
-                // (which flows through `exact`/`marks(from: exact)`
-                // elsewhere) is filtered out for this device just below, so
-                // neither signal wins; the device renders unattributed at
-                // port level. The pre-existing usbTunnel/Stage-A-shortcut
-                // rule (`structurallyConflicted`, excluded from `absorbed`
-                // only) is unchanged.
-                if candidate.source == .pcieStageBMatch {
+                // Two strong, independent signals disagree: the device's
+                // position puts it in one box, its own name or numbers name
+                // another. This function cannot tell which is wrong, and a
+                // device in the wrong box is worse than one left in the
+                // port's separate list, so for every structural source that
+                // can name a box other than the identity's, the device goes
+                // to `forcedPortLevel`: a TERMINAL exclusion from every later
+                // pass, not merely from `absorbed`. Its name/numeric claim is
+                // stripped just below (`exact`, then the numeric loop that
+                // builds `identityClaims`), so neither signal places it, it
+                // never becomes a mark, and it stops inherited ownership for
+                // its subtree.
+                //
+                // The conflict uses the RAW `exact` and `numericIdentity`,
+                // before the USB3 check filters `identityClaims`: a claim
+                // that check would refuse still counts as a disagreement,
+                // which is the conservative side.
+                //
+                // `.pcieStageAShortcut` keeps the weaker
+                // `structurallyConflicted` rule (excluded from `absorbed`
+                // only). Stage A only fires on a one-box chain, so its
+                // candidate and any identity claim name the same box and this
+                // branch is not reachable for it in practice.
+                switch candidate.source {
+                case .usbTunnelDepth, .tb5TunnelHubMap, .pcieStageBMatch:
                     forcedPortLevelIDs.insert(candidate.id)
-                } else {
+                    // A device can carry two candidates (a TB5 hub can also
+                    // satisfy the depth join). Drop any structural mark an
+                    // earlier, agreeing candidate left, so a forced device is
+                    // never a region root.
+                    structuralOwner[candidate.id] = nil
+                    structuralRoots[candidate.id] = nil
+                case .pcieStageAShortcut:
                     structurallyConflicted.insert(candidate.id)
                 }
                 continue
@@ -859,259 +957,149 @@ public struct ChainDeviceAttribution: Equatable {
             }
         }
 
-        // Stage B v2 (step 8): a `forcedPortLevel` device is excluded from
-        // EVERY chain-attribution mechanism, name-based ones included. Strip
-        // it from both name-match dictionaries now, before either feeds
-        // `marks(...)` below, so it can never become a `regionRoot` or get
-        // `absorbed` on its own name/numeric evidence, and so `claimTarget`
-        // is never invoked with it as the claimant either.
+        // 2. Identity claims name a box. A device's own DROM numbers are a
+        // far stronger join than a product-name string, which can coincide
+        // by accident or by a generic word, so when a device's idVendor/
+        // idProduct identify exactly one box (`numericIdentity(of:)`), that
+        // box wins over the box its name matched. Numeric evidence counts
+        // only when it POSITIVELY matches: some units report a different
+        // vendor id on the Thunderbolt and USB sides, so a mismatch proves
+        // nothing on its own. The claim itself places only the identity
+        // device (see `identityMark` below).
+        func claimedBox(_ device: USBDevice, nameMatch switchID: Int64) -> Int64 {
+            numericIdentity(of: device)?.sw.id ?? switchID
+        }
+        // Position evidence is now complete except for the USB2 pairing,
+        // which is position evidence too (place plus Container ID) and runs
+        // next, so that identity claims meet ALL of it in one place below.
+
+        // Each box's top USB2 hub, by position and Container ID. Owners come
+        // from structural marks alone, inherited down the forest, so an
+        // identity claim never seeds this pass. `accepts` is the precedence
+        // check, and it reads position marks and the hub's OWN identity only:
+        // - a hub forced to port level, or one a structural mark already
+        //   places in another box, is refused (position against position:
+        //   the pairing yields, and all or nothing empties it);
+        // - a hub whose own identity (exact name or DROM numbers) names
+        //   another box is a same-node contradiction, so it is forced to
+        //   port level as well as refused, exactly as the candidate loop
+        //   above forces a structural candidate that contradicts its own
+        //   identity. Forcing is what keeps the contradiction on record
+        //   after all-or-nothing has wiped the pairing's own evidence;
+        //   without it the hub's numbers would mark it into the box its
+        //   position contradicts.
+        // An identity claim from a device below the hub is not consulted
+        // here: it places only that device (`identityMark`).
+        var structuralInherited: [UInt64: Int64] = [:]
+        func inheritStructural(_ node: USBDeviceNode, _ inherited: Int64?) {
+            let owner = forcedPortLevelIDs.contains(node.device.id)
+                ? nil
+                : (structuralRoots[node.device.id] ?? inherited)
+            if let owner { structuralInherited[node.device.id] = owner }
+            for child in node.children { inheritStructural(child, owner) }
+        }
+        for root in forest { inheritStructural(root, nil) }
+        let topUSB2Hubs = Self.resolveUSB2HubPairing(
+            chainNodes: chainNodes, forest: forest, usb3Owner: structuralInherited
+        ) { hubID, switchID in
+            if forcedPortLevelIDs.contains(hubID) { return false }
+            if let structural = structuralRoots[hubID], structural != switchID { return false }
+            if let hub = nodeByID[hubID]?.device,
+               let ownIdentity = numericIdentity(of: hub)?.sw.id ?? exact[hubID],
+               ownIdentity != switchID {
+                forcedPortLevelIDs.insert(hubID)
+                return false
+            }
+            return true
+        }
+
+        // A `forcedPortLevel` device (Stage B v2 step 8, a structural
+        // conflict in the candidate loop, or a pairing conflict just above)
+        // is excluded from EVERY chain-attribution mechanism, name-based
+        // ones included. Strip it from `exact` now, after every pass that
+        // needed the raw `exact` to detect a conflict and before `exact`
+        // seeds `identityClaims`; the numeric half of `identityClaims` skips
+        // forced devices where it is built. So a forced device can never
+        // become a `regionRoot` or get `absorbed` on its own name/numeric
+        // evidence, and `identityMark` is never invoked with it as the
+        // claimant either.
         if !forcedPortLevelIDs.isEmpty {
             exact = exact.filter { !forcedPortLevelIDs.contains($0.key) }
-            affiliates = affiliates.filter { !forcedPortLevelIDs.contains($0.key) }
         }
 
-        // 2. Region roots, in two passes: exact matches settle ownership, then
-        // affiliate matches may only fill the gaps left over.
-        //
-        // The order is the point, and it is a correctness fix rather than tidying.
-        // An affiliate match is a partial-name match, so a chain device whose
-        // model name is a single generic word ("Hub", which clears the
-        // three-character floor) matches the internal hub chips of completely
-        // unrelated devices, because "USB3.0 Hub" contains the whole word "hub"
-        // and so does nearly every hub descriptor ever written. Running both
-        // strengths together let such a match re-parent a device that an exact
-        // match had already placed inside a different chain device, moving its
-        // whole subtree under an unrelated dock. Exact evidence going first, and
-        // affiliate matches being refused wherever they would contradict it,
-        // closes that without needing a list of words to distrust.
-        //
-        // A hub claimed by two DIFFERENT chain devices is claimed by neither.
-        // Corpus counterexample: on `m4_macos26.5.2_x` an Echo 13 dock and the
-        // Envoy Ultra chained behind it expose their identity endpoints on the
-        // SAME hub, which means the hub is upstream of both. Letting either one
-        // claim it (say, the deeper device) moved five of that machine's
-        // endpoints inside a bare SSD.
-        //
-        // That guard only fires when TWO chain devices claim the same hub. It
-        // does nothing when only one does, and promoting a lone claim onto the
-        // parent hub is right in the common case: the hub genuinely is the
-        // claiming device's own hub. Blocking needs POSITIVE evidence the hub
-        // belongs to someone else.
-        //
-        // Numeric identity first, strings only as a last resort:
-        // `numericIdentity(of:)`, defined above (hoisted so the structural
-        // tunnel join further down can use it too), looks up the chain device
-        // (if any) whose DROM (Device Vendor ID, Device Model ID) exactly
-        // equals a USB device's own (idVendor, idProduct). A number pair is a
-        // far stronger join than a product-name string, which can coincide by
-        // accident or by a generic word ("Hub"). Strings are still needed for
-        // two reasons: some devices carry no exact numeric match at all (a
-        // hub chip's PID is its own, not the dock's), and one corpus quirk
-        // means a VID MISMATCH does not prove a different vendor (see
-        // `numericIdentity`'s doc comment above), so numeric evidence is
-        // trusted only when it POSITIVELY matches, never as a negative signal
-        // on its own.
-        //
-        // Set of chain devices whose DROM vendor id equals `vid`, applying
-        // the same zero-guard as `numericIdentity`. Used by tier (c) below,
-        // kept separate so its own ambiguity rule (see there) reads clearly.
-        func chainDevicesWithDROMVendorID(_ vid: Int) -> [IOThunderboltSwitchNode] {
-            guard vid != 0 else { return [] }
-            return chainNodes.filter { $0.sw.dromVendorID == vid }
+        // Position evidence ABOUT one node: a structural candidate of its
+        // own, or the pairing's choice of it as a box's top USB2 hub.
+        // Inherited ownership is not position evidence about the node.
+        func positionBox(_ deviceID: UInt64) -> Int64? {
+            structuralOwner[deviceID] ?? topUSB2Hubs[deviceID]
         }
 
-        // Same normalise-then-length-floor discipline the name-matching pass
-        // above uses (`key.count >= 3`, "two characters is not a name, it is
-        // a chance collision"): a hub vendor string, or the string it is being
-        // compared against, has to actually look like a name before it counts
-        // as evidence either way. String-only fallback, tier (d) below.
-        func vendorNamesMatch(_ a: String, _ b: String) -> Bool {
-            guard normalized(a).count >= 3, normalized(b).count >= 3 else { return false }
-            return affiliated(product: a, model: b)
-        }
-
-        var chainVendorByID: [Int64: String] = [:]
-        for node in chainNodes { chainVendorByID[node.sw.id] = node.sw.vendorName }
-
-        // `claimTarget` returns BOTH the redirection (leaf or parent hub) and
-        // the switch id the claim is now recorded against. The two used to be
-        // the same by construction (the caller always passed the NAME match's
-        // switch id straight through), but numeric identity can override it:
-        // if the claiming endpoint's own idVendor/idProduct exactly identifies
-        // it as a DIFFERENT chain device than the name match proposed, the
-        // number pair wins (see tier order below), and every subsequent
-        // decision, this call's and the caller's grouping, has to use that
-        // corrected switch id, not the name match's.
-        func rawClaimTarget(_ deviceID: UInt64, claimedBy switchID: Int64) -> (target: UInt64, switchID: Int64)? {
-            guard let node = nodeByID[deviceID] else { return nil }
-
-            // Computed FIRST, before any early return, and used in every
-            // return path below including the hub-claimant and
-            // no-hub-parent ones. An earlier version computed this only on
-            // the "has a hub parent" path, so a device that IS itself a hub,
-            // or has no hub parent at all, kept the NAME match's switch id
-            // even when its own numeric identity said otherwise: the
-            // promised numeric correction silently never applied there.
-            // Found in review (#493 round 5); tests cover both paths.
-            let endpointIdentity = numericIdentity(of: node.device)
-            let effectiveSwitchID = endpointIdentity?.sw.id ?? switchID
-
-            if node.device.isHub { return (deviceID, effectiveSwitchID) }
-            guard let parentID = parentOf[deviceID], let parent = nodeByID[parentID],
-                  parent.device.isHub
-            else { return (deviceID, effectiveSwitchID) }
-
-            // Tier (a)/(b): the hub's OWN idVendor/idProduct, checked first.
-            // When the hub itself numerically identifies as a chain device,
-            // that is decisive and no string is ever consulted: identifies as
-            // the claimer -> promote, identifies as someone else -> leaf.
-            if let hubIdentity = numericIdentity(of: parent.device) {
-                return hubIdentity.sw.id == effectiveSwitchID
-                    ? (parentID, effectiveSwitchID)
-                    : (deviceID, effectiveSwitchID)
-            }
-
-            // Tier (c): the endpoint IS numerically identified but the hub
-            // itself is not (its own idVendor/idProduct match no chain
-            // device's DROM exactly). Fall back to VID-only: a multi-chip
-            // dock's internal hub chips routinely share the dock's chassis
-            // VID while carrying their OWN model id, so a VID-only match to
-            // the claiming chain device is still real, if weaker, evidence.
-            //
-            // Same set-based discipline as `numericIdentity`: the SET of
-            // chain devices whose DROM VID equals the hub's VID decides, not
-            // "the first one found". Promotes only when that set is EXACTLY
-            // the claiming chain device (one match, and it is the claimer);
-            // any different switch in the set refuses, even if the claimer
-            // is ALSO in it (ambiguous, so it fails closed); an empty set
-            // falls through to the string tier.
-            //
-            // Residual, accepted: a VID-only match is a coincidence risk in
-            // principle (the Thunderbolt-SIG-assigned Device Vendor ID and
-            // the USB-IF-assigned idVendor are different registries, so an
-            // unrelated company could in theory hold matching numbers in
-            // both), which this tier cannot rule out. It fails SAFE either
-            // way: a wrong promotion would misattribute a device, a wrong
-            // refusal only leaves it unattributed (the file's documented
-            // "stays unattributed" default), so a coincidence here costs a
-            // missed attribution, never a wrong one. Zero such collisions
-            // have been observed corpus-wide (22 exact VID+PID matches, 51
-            // VID-only matches, 2026-08-06 sweep); that is evidence for this
-            // tier being safe in practice, not a guarantee, and is not
-            // treated as one anywhere in this function.
-            //
-            // #493 walk-through: the OWC Express 1M2 endpoint is
-            // 0x174c/0x2465, an exact match to the OWC switch's own DROM, so
-            // `effectiveSwitchID` is the OWC (tier a/b never fires: the
-            // CalDigit hub's own idVendor/idProduct, 0x2188/0x5803, is not an
-            // exact match to ANY chain device; the CalDigit DOCK's own DROM
-            // model id is 0x5988, not 0x5803, because the hub is one of the
-            // dock's internal chips, not the dock's own identity endpoint).
-            // Here in tier (c): the hub's VID (0x2188) equals the CalDigit
-            // DOCK's DROM vendor id, a DIFFERENT chain device from the OWC
-            // (0x174c), so this tier returns leaf. No vendor-name string is
-            // ever read for this case.
-            if let endpointIdentity {
-                let hubVID = Int(parent.device.vendorID)
-                let matchingChainDevices = chainDevicesWithDROMVendorID(hubVID)
-                if matchingChainDevices.contains(where: { $0.sw.id != endpointIdentity.sw.id }) {
-                    return (deviceID, effectiveSwitchID)
-                }
-                if matchingChainDevices.count == 1 {
-                    // The only match, and (per the check above) it must be
-                    // the claiming chain device itself.
-                    return (parentID, effectiveSwitchID)
-                }
-                // Empty set: VID-only was inconclusive too (hub VID matches
-                // nothing on this fabric). Fall through to the string tier
-                // below. This is also where the corpus quirk lives: some OWC
-                // units report Thunderbolt vendor id 0x1e91 while their USB
-                // idVendor stays 0x174c. That VID "mismatch" is NOT treated
-                // as evidence of a different vendor above (only a POSITIVE
-                // match to someone else refuses, never a negative non-match
-                // to the claimer), so a 0x1e91 hub falls through here rather
-                // than being wrongly blocked, and the string tier decides
-                // instead.
-            }
-
-            // Tier (d): no numeric evidence at all, or tier (c) fell through
-            // inconclusive. The string rule here is deliberately the ORIGINAL
-            // (round 2) one, not the same-brand-refusing rewrite that
-            // replaced it as the file's only rule (round 3): a hub vendor
-            // NAME match to the claimer, its own vendor or its chain device's
-            // DROM vendor, wins over a match to a different chain device.
-            // Numeric identity is now the primary signal and handles the
-            // same-brand ambiguity round 3 fixed (a same-brand endpoint on a
-            // same-brand hub typically also carries a numeric identity, which
-            // resolves it in tier a/b/c before a string is ever read); once
-            // evidence has fallen all the way through to a bare name-string
-            // coincidence, over-blocking on it costs more correct
-            // attributions than the residual ambiguity it protects against.
-            guard let hubVendor = parent.device.vendorName else { return (parentID, effectiveSwitchID) }
-            let matchesClaimingDevice = node.device.vendorName.map { vendorNamesMatch(hubVendor, $0) } ?? false
-            let matchesClaimingChain = chainVendorByID[effectiveSwitchID].map { vendorNamesMatch(hubVendor, $0) } ?? false
-            if matchesClaimingDevice || matchesClaimingChain { return (parentID, effectiveSwitchID) }
-            let namesADifferentChainDevice = chainNodes.contains { other in
-                other.sw.id != effectiveSwitchID && vendorNamesMatch(hubVendor, other.sw.vendorName)
-            }
-            return namesADifferentChainDevice ? (deviceID, effectiveSwitchID) : (parentID, effectiveSwitchID)
-        }
-        // Stage B v2 (step 9, round-8 finding 1): a `forcedPortLevel` device
-        // can never be the TARGET of anyone else's evidence either. Wraps
-        // `rawClaimTarget`: when the raw redirection lands on a forced hub,
-        // the claim downgrades to the child device itself (conservative,
-        // per the plan) rather than being dropped outright, so the child
-        // still renders wherever its own evidence placed it, just without
-        // promoting into a hub structural evidence says sits outside every
-        // chain switch on this port.
-        func claimTarget(_ deviceID: UInt64, claimedBy switchID: Int64) -> (target: UInt64, switchID: Int64)? {
-            guard let result = rawClaimTarget(deviceID, claimedBy: switchID) else { return nil }
-            if result.target != deviceID, forcedPortLevelIDs.contains(result.target) {
-                return (deviceID, result.switchID)
-            }
-            return result
-        }
-        // `contested` is the other half of the shared-hub guard, and it is not
-        // optional bookkeeping. Refusing to MARK a disputed hub leaves it
-        // unowned, and unowned is exactly what vendor continuity looks for, so
-        // without this the hub the guard just protected gets handed to whichever
-        // chain device happens to share its vendor. Recording where the
-        // ambiguity was seen keeps that evidence available to the later pass.
+        // THE RULE where identity evidence meets position evidence (owner
+        // ruling, 2026-10-08). Every identity claim (exact name or DROM
+        // numbers) passes through here once, after all position evidence is
+        // settled, and nothing else combines the two. In full:
         //
-        // It gates vendor evidence only, deliberately. A disputed hub nested
-        // inside another chain device's region still INHERITS that region, which
-        // is a true statement and not a guess: a region root is the hub a chain
-        // device's identity endpoint hangs off, so everything below it reaches the
-        // Mac through that device. What that leaves is a row reading slightly more
-        // definite than its evidence, not a wrong parent; both the reasoning and
-        // the residual are set out in
-        // `contestedSubtreeStillInheritsItsEnclosingRegion`.
+        // 1. Identity evidence places only the identity device itself. It
+        //    never passes the box on to a parent hub: no tier of numeric or
+        //    vendor evidence promotes a claim onto the hub above it.
+        // 2. An identity device that is itself a hub is not marked, unless
+        //    position evidence already places that same hub in the same box,
+        //    where the mark changes nothing. Hubs, and everything under
+        //    them, are grouped only by position evidence: the TB5 route map,
+        //    the USB-tunnel depth join, PCIe Stage A and B, and the USB2
+        //    pairing.
+        // 3. A device whose own position evidence names a different box
+        //    from its identity is placed by neither: it is forced to port
+        //    level (the candidate loop and the pairing's `accepts` above),
+        //    so it never reaches here as a claimant. The check here is the
+        //    same rule applied once more, defensively.
+        // 4. Position marks are then merged over identity marks. By 2 and 3,
+        //    the two never name different boxes for one node, so the merge
+        //    adds and never overrides.
         //
-        // Slightly over-collects, harmlessly: a target contested in the affiliate
-        // pass is recorded even when the exact pass resolved it cleanly. Anything
-        // already owned never reaches the vendor branch, so the extra entry has no
-        // effect.
-        var contested: Set<UInt64> = []
-        func marks(from matches: [UInt64: Int64]) -> [UInt64: Int64] {
-            var claims: [UInt64: Set<Int64>] = [:]
-            for (deviceID, switchID) in matches {
-                guard let (target, effectiveSwitchID) = claimTarget(deviceID, claimedBy: switchID) else { continue }
-                claims[target, default: []].insert(effectiveSwitchID)
-            }
-            for (target, switchIDs) in claims where switchIDs.count > 1 {
-                contested.insert(target)
-            }
-            return claims.compactMapValues { $0.count == 1 ? $0.first : nil }
+        // Why: a mark on a hub flows down to everything below it, and an
+        // identity device can hang on a hub that belongs to another box (a
+        // chained enclosure's billboard on the dock's own USB2 hub). Every
+        // earlier attempt to fence that flow guarded one meeting point and
+        // left the next one open. A mark that lands only on a device that
+        // is not a hub cannot carry anything with it.
+        func identityMark(_ deviceID: UInt64, claimedBy switchID: Int64) -> Int64? {
+            guard let device = nodeByID[deviceID]?.device,
+                  !forcedPortLevelIDs.contains(deviceID)
+            else { return nil }
+            let box = claimedBox(device, nameMatch: switchID)
+            if let positioned = positionBox(deviceID) { return positioned == box ? box : nil }
+            return device.isHub ? nil : box
         }
 
-        var regionRoots = marks(from: exact)
+        // The box's own identity devices: an exact name match, or a device
+        // whose VID/PID equal one box's DROM numbers. Numeric identity wins
+        // in `claimedBox` when the two disagree.
+        var identityClaims = exact
+        for node in allNodes where identityClaims[node.device.id] == nil
+            && !forcedPortLevelIDs.contains(node.device.id) {
+            if let box = numericIdentity(of: node.device) { identityClaims[node.device.id] = box.sw.id }
+        }
+        // USB3 check: a SuperSpeed device reached the Mac over a USB3 path,
+        // so it cannot be the identity device of a box that has none. The
+        // box is the one the claim names, after any numeric override.
+        identityClaims = identityClaims.filter { deviceID, switchID in
+            guard let device = nodeByID[deviceID]?.device else { return true }
+            let boxID = claimedBox(device, nameMatch: switchID)
+            guard let box = chainNodes.first(where: { $0.sw.id == boxID }) else { return true }
+            return !Self.usb3CheckRefuses(device, box: box.sw)
+        }
+        var regionRoots: [UInt64: Int64] = [:]
+        for (deviceID, switchID) in identityClaims {
+            if let box = identityMark(deviceID, claimedBy: switchID) { regionRoots[deviceID] = box }
+        }
 
-        // Structural marks win outright over name matching (step 0's
-        // precedence rule): merged in here, before the first inheritance
-        // pass, so `regionOwner` reflects them immediately and the affiliate
-        // pass below (which only fills gaps `regionOwner` leaves open) can
-        // never contradict one.
+        // 3. Position marks over identity marks. `identityMark` has already
+        // kept every identity mark off a node position places elsewhere, so
+        // this merge only adds: `structural` wins is a statement of
+        // precedence, not a path that fires.
         regionRoots.merge(structuralRoots) { _, structural in structural }
+        for (hubID, switchID) in topUSB2Hubs { regionRoots[hubID] = switchID }
 
         // 3. Inherit down the forest. A deeper mark overrides a shallower one,
         // which is exactly how a chained dock's subtree separates from the
@@ -1134,94 +1122,8 @@ public struct ChainDeviceAttribution: Equatable {
         }
         for root in forest { descend(root, nil) }
 
-        // Affiliate marks now, keeping only those that do not contradict what
-        // the exact pass established. Note this compares against the OWNER of
-        // the hub being claimed, so an affiliate match is still free to open a
-        // region inside an unowned part of the tree.
-        let affiliateMarks = marks(from: affiliates).filter { target, switchID in
-            guard let established = regionOwner[target] else { return true }
-            return established == switchID
-        }
-        if !affiliateMarks.isEmpty {
-            regionRoots.merge(affiliateMarks) { existing, _ in existing }
-            regionOwner = [:]
-            for root in forest { descend(root, nil) }
-        }
-
-        // 4. Vendor continuity, for what the structural pass could not place.
-        //
-        // Gated on every chain device having actually RESOLVED a region, which is
-        // a correctness requirement and not caution. Vendor sets are built only
-        // from resolved regions, so a chain device without one contributes no
-        // vendors at all: a device physically inside dock B whose parents are VIA
-        // Labs hubs would then be handed to dock A purely because dock A is the
-        // only candidate with a vendor set, not because the vendor discriminates.
-        // VIA Labs, Genesys Logic, Terminus and Fresco Logic hubs are inside
-        // nearly every dock, so that failure mode is the common case, not an edge
-        // one. With every chain device holding a region, "the vendor is in
-        // exactly one set" is a real comparison between real candidates.
-        //
-        // This keys on regions and not on name matches, and the difference is a
-        // hole that was open until an adversarial review found it: on a chain of
-        // three where two devices name endpoints on one shared hub and the third
-        // is cleanly matched, every device HAS a name match, yet only the third
-        // holds a region. Keying on matches made the gate pass, and vendor
-        // continuity then handed the disputed hub, plus everything inside the
-        // first two devices, to the third. That is the exact wrong-parent
-        // failure the shared-hub guard exists to prevent, reached by the other
-        // path.
+        // Reported, not acted on: no pass reads it any more.
         let allAnchored = Set(regionRoots.values).count == chainNodes.count
-
-        var vendorsBySwitch: [Int64: Set<UInt16>] = [:]
-        for (deviceID, switchID) in regionOwner {
-            guard let device = nodeByID[deviceID]?.device else { continue }
-            vendorsBySwitch[switchID, default: []].insert(device.vendorID)
-        }
-
-        // Top-down, and the vendor sets are frozen from step 3: a device placed
-        // here never widens a set and so never seeds a further inference.
-        if allAnchored, !vendorsBySwitch.isEmpty {
-            // `blocked` carries the contested finding down the subtree. A hub two
-            // chain devices both named is upstream of both, so every device under
-            // it is inside one of them and nothing here can say which: a vendor
-            // mark on the hub OR on anything below it is a guess. Direct evidence
-            // still wins inside that subtree, because `regionRoots` is consulted
-            // first and a structural mark there was never in dispute.
-            //
-            // Found by a re-verification pass after the first attempt at this
-            // guard, which only required every chain device to hold a region
-            // somewhere. That is necessary but not sufficient: when the two
-            // devices sharing a disputed hub each hold a second region elsewhere,
-            // the gate opens legitimately and the disputed hub, still unowned, was
-            // handed to an unrelated third device along with everything inside it.
-            func vendorDescend(_ node: USBDeviceNode, _ inherited: Int64?, _ blocked: Bool) {
-                // Stage B v2 boundary (step 9, round-9 finding): a
-                // `forcedPortLevel` node blocks vendor continuity exactly
-                // like a contested hub does, sticky down the subtree, and
-                // additionally it never itself takes an inherited owner (the
-                // same rule `descend` applies). A vendor-only descendant of a
-                // boundary stays port-level even when its vendor is unique
-                // to an attributed switch above; only a self-anchoring
-                // `regionRoots` entry (checked first, below) can place a
-                // device inside a blocked subtree.
-                let isBoundary = forcedPortLevelIDs.contains(node.device.id)
-                let blockedHere = blocked || contested.contains(node.device.id) || isBoundary
-                var owner = isBoundary ? nil : (regionRoots[node.device.id] ?? inherited)
-                if owner == nil, !blockedHere {
-                    let matches = vendorsBySwitch.filter { $0.value.contains(node.device.vendorID) }
-                    // Exactly one candidate, or none: a vendor in two sets
-                    // discriminates nothing, so the device stays put.
-                    if matches.count == 1, let switchID = matches.keys.first {
-                        owner = switchID
-                        regionRoots[node.device.id] = switchID
-                    }
-                }
-                if let owner { regionOwner[node.device.id] = owner }
-                let childInherited = isBoundary ? nil : owner
-                for child in node.children { vendorDescend(child, childInherited, blockedHere) }
-            }
-            for root in forest { vendorDescend(root, nil, false) }
-        }
 
         // 5. Drop redundant marks: a region root whose nearest marked ancestor
         // has the same owner adds nothing, because inheritance already covers
@@ -1229,11 +1131,10 @@ public struct ChainDeviceAttribution: Equatable {
         // expanded view, once inside its ancestor and once as a region of its
         // own.
         //
-        // Reachable, not theoretical: a CalDigit dock publishes both
-        // `TS5 USB 3 Hub` (a hub, which marks itself) and
-        // `CalDigit TS5 Audio - Rear` (an endpoint one level further in, which
-        // marks the hub it hangs off). Two matches, same chain device, nested.
-        // Decided against the marks as they stood, not against a set being
+        // Reachable, not theoretical: a box's own identity endpoint (marked
+        // by its name or numbers) routinely hangs below a hub that position
+        // evidence already places in the same box. Two marks, same chain
+        // device, nested. Decided against the marks as they stood, not against a set being
         // mutated underneath the loop: with a three-deep nest, each level has to
         // be judged against its real nearest ancestor rather than one that a
         // previous iteration has already removed.
@@ -1266,27 +1167,21 @@ public struct ChainDeviceAttribution: Equatable {
             }
         }
 
-        // 6. Absorbed: the final identity decision for each exact-name
-        // match, not the raw `exact` dictionary. Two differences from a bare
-        // `Set(exact.keys)`:
-        //
-        // - `claimTarget` is re-run here (its numeric-identity correction is
-        //   already baked into `regionOwner`/`regionRoots` via `marks(from:
-        //   exact)` above; re-deriving it is what makes this the FINAL
-        //   decision rather than the raw name match, even though today it
-        //   always succeeds when `nodeByID[deviceID]` exists, which it does
-        //   for every key in `exact` by construction).
-        // - A device flagged `structurallyConflicted` above (its own
-        //   structural depth evidence disagreed with this SAME exact match)
-        //   is explicitly excluded: its name/numeric placement is kept
-        //   (unaffected, it was never removed from `exact` or from
-        //   `marks(from: exact)`), but it is not collapsed into the chain
-        //   row as though there were no doubt about its identity. See the
-        //   precedence-safety note on the structural pass above.
+        // 6. Absorbed: the final identity decision for each identity claim
+        // (exact name or DROM numbers), not the raw `identityClaims`
+        // dictionary. `identityMark` is re-run here, so an absorbed device
+        // is exactly one whose claim marks it: a hub claimant `identityMark`
+        // refused is not marked, so it is not collapsed into a box row
+        // either. A device flagged `structurallyConflicted` above
+        // (only a Stage A shortcut candidate disagreeing with this SAME
+        // identity claim) is excluded: its name/numeric placement is kept,
+        // but it is not collapsed into the chain row as though there were no
+        // doubt about its identity. A device forced to port level never
+        // reaches this loop: it is not in `identityClaims`.
         var absorbed: Set<UInt64> = []
-        for (deviceID, switchID) in exact {
+        for (deviceID, switchID) in identityClaims {
             guard !structurallyConflicted.contains(deviceID),
-                  claimTarget(deviceID, claimedBy: switchID) != nil
+                  identityMark(deviceID, claimedBy: switchID) != nil
             else { continue }
             absorbed.insert(deviceID)
         }
@@ -1298,37 +1193,6 @@ public struct ChainDeviceAttribution: Equatable {
             allAnchored: allAnchored,
             portLevelBoundaries: forcedPortLevelIDs
         )
-    }
-
-    /// Whether a USB product name and a fabric model name name the same product
-    /// family: one's words appear as a contiguous run inside the other's.
-    ///
-    /// Word-level, not substring, in both directions. `TS5` matches
-    /// `TS5 USB 3 Hub` (the DROM carries the short name, the USB descriptors the
-    /// long one) and `Thunderbolt Display` matches `Apple Thunderbolt Display`
-    /// (the other way round), while `TS5` correctly fails against `ATS5000`.
-    static func affiliated(product: String, model: String) -> Bool {
-        let p = matchWords(product)
-        let m = matchWords(model)
-        guard !p.isEmpty, !m.isEmpty else { return false }
-        return contains(p, m) || contains(m, p)
-    }
-
-    /// Whole words, punctuation dropped, so `Thunderbolt(TM) 4 Dock` and
-    /// `Thunderbolt (TM) 4 Dock` compare equal and `USB2.0` splits the same way
-    /// on both sides.
-    private static func matchWords(_ name: String) -> [String] {
-        name.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-    }
-
-    private static func contains(_ haystack: [String], _ needle: [String]) -> Bool {
-        guard needle.count <= haystack.count else { return false }
-        for start in 0...(haystack.count - needle.count) {
-            if Array(haystack[start..<(start + needle.count)]) == needle { return true }
-        }
-        return false
     }
 
     /// Whitespace-collapsed, case-folded name for matching a USB product name

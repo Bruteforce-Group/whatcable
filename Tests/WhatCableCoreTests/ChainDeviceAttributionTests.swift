@@ -55,7 +55,9 @@ struct ChainDeviceAttributionTests {
         productID: UInt16 = 0x1234,
         vendor: String?,
         product: String?,
-        isHub: Bool
+        isHub: Bool,
+        speed: UInt8 = 3,
+        containerID: String? = nil
     ) -> USBDevice {
         USBDevice(
             id: id,
@@ -66,10 +68,11 @@ struct ChainDeviceAttributionTests {
             productName: product,
             serialNumber: nil,
             usbVersion: nil,
-            speedRaw: 3,
+            speedRaw: speed,
             busPowerMA: nil,
             currentMA: nil,
             deviceClass: isHub ? 0x09 : 0x00,
+            containerID: containerID,
             rawProperties: [:]
         )
     }
@@ -136,7 +139,7 @@ struct ChainDeviceAttributionTests {
 
     // MARK: - The name match
 
-    @Test("A device named exactly like a chain device IS that device, so it is absorbed")
+    @Test("A device named exactly like a chain device IS that device: absorbed, and its hub gains nothing by name")
     func exactNameAbsorbs() {
         let devices = [
             device(id: 1, locationID: 0x0310_0000, vendorID: 0x1D5C, vendor: "Fresco Logic, Inc.", product: "USB2.0 Hub", isHub: true),
@@ -144,19 +147,19 @@ struct ChainDeviceAttributionTests {
         ]
         let result = resolve(oneDeviceChain(), devices)
         #expect(result.absorbed == [2], "The dock's own USB identity endpoint should be absorbed into the chain row")
-        #expect(result.regionRoots[1] == 200, "Its parent hub is the dock's upstream hub")
-        #expect(result.regionOwner[1] == 200)
+        #expect(result.regionRoots == [2: 200], "A name passes nothing to the parent hub; only numbers can")
+        #expect(result.regionOwner[1] == nil, "The hub has no evidence of its own, so it goes to the separate tree")
         #expect(result.regionOwner[2] == 200)
     }
 
-    @Test("A device named like PART of a chain device marks its hub but is never absorbed")
+    @Test("A device named like PART of a chain device groups nothing")
     func affiliateMarksWithoutAbsorbing() {
         // CalDigit's whole TS line: the fabric reports "TS5", the USB
         // descriptors only ever say "TS5 USB 3 Hub" or "CalDigit TS5 Audio -
         // Rear", so exact equality recognises the dock never, on any machine.
-        // Absorbing on a loose match would be a different bug: the audio
-        // endpoint is a real thing inside the dock, and deleting it from the
-        // tree is not de-duplication.
+        // A partial name is not evidence: in the corpus it put ten devices in
+        // the wrong box. Both devices go to the separate tree, and neither is
+        // absorbed.
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(id: 200, parent: 100, vendor: "CalDigit", model: "TS5", depth: 1)
         let chain = ThunderboltTopology.tree(from: root, in: [root, dock])
@@ -166,23 +169,8 @@ struct ChainDeviceAttributionTests {
         ]
         let result = resolve(chain, devices)
         #expect(result.absorbed.isEmpty, "A partial name match must not delete a device from the tree")
-        #expect(result.regionOwner[1] == 200)
-        #expect(result.regionOwner[2] == 200)
-    }
-
-    @Test("Word runs match in both directions, and only on whole words")
-    func affiliateMatchesWholeWordsOnly() {
-        #expect(ChainDeviceAttribution.affiliated(product: "TS5 USB 3 Hub", model: "TS5"))
-        #expect(ChainDeviceAttribution.affiliated(product: "Apple Thunderbolt Display", model: "Thunderbolt Display"))
-        #expect(ChainDeviceAttribution.affiliated(product: "WD_BLACK D50", model: "WD_BLACK D50 Game Dock"))
-        #expect(ChainDeviceAttribution.affiliated(product: "Microsoft Surface Thunderbolt(TM) 4 Dock Audio", model: "Surface Thunderbolt(TM) 4 Dock"))
-        // A short model name inside an unrelated word is the reason this is
-        // word-level and not `contains`.
-        #expect(!ChainDeviceAttribution.affiliated(product: "ATS5000 Scanner", model: "TS5"))
-        #expect(!ChainDeviceAttribution.affiliated(product: "Docking Station", model: "Dock"))
-        #expect(!ChainDeviceAttribution.affiliated(product: "Thunderbolt 4 Hub", model: "Thunderbolt 4 Dock"))
-        // Non-contiguous words are not a match: the run has to be intact.
-        #expect(!ChainDeviceAttribution.affiliated(product: "TS5 Fancy USB Hub", model: "TS5 USB Hub"))
+        #expect(result.regionOwner[1] == nil)
+        #expect(result.regionOwner[2] == nil)
     }
 
     @Test("Two chain devices with the same model name match neither")
@@ -229,12 +217,13 @@ struct ChainDeviceAttributionTests {
             device(id: 4, locationID: 0x0313_0000, vendorID: 0x0BDA, vendor: "Realtek", product: "USB 10/100/1000 LAN", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots.isEmpty, "The shared hub must not be marked for either device")
+        #expect(result.regionRoots[1] == nil, "The shared hub must not be marked for either device")
+        #expect(result.regionRoots == [2: 200, 3: 300], "Each identity endpoint marks only itself")
         #expect(result.absorbed == [2, 3], "Both are still their own chain device, so both are still absorbed")
         #expect(result.regionOwner[4] == nil, "The LAN adapter must not be handed a guessed parent")
     }
 
-    @Test("Vendor continuity places a device by its hub vendor when every chain device is matched")
+    @Test("Vendor IDs group nothing, even when every chain device holds a region")
     func vendorContinuityPlacesTheEthernetAdapter() {
         // The reference machine's shape, reduced: the dock's USB2 subtree is
         // anchored, its USB3 subtree is not, and the two are linked only by both
@@ -253,13 +242,13 @@ struct ChainDeviceAttributionTests {
         ]
         let result = resolve(chain, devices)
         #expect(result.allAnchored)
-        #expect(result.regionOwner[7] == 300, "A VIA Labs hub is only in the dock's vendor set")
-        #expect(result.regionOwner[8] == 300, "So the adapter behind it inherits the dock")
-        #expect(result.regionOwner[6] == nil, "Intel is in nobody's set, so the hub above stays put")
-        #expect(result.regionRoots[7] == 300, "Vendor continuity marks a region, so the expanded view agrees")
+        #expect(result.regionOwner[7] == nil, "Sharing a vendor with the dock's devices is not evidence")
+        #expect(result.regionOwner[8] == nil, "So the adapter behind it goes to the separate tree")
+        #expect(result.regionOwner[6] == nil)
+        #expect(result.regionRoots[7] == nil)
     }
 
-    @Test("Vendor continuity is off entirely unless every chain device is matched")
+    @Test("With one chain device unnamed, nothing is placed by vendor or by a name passed to a hub")
     func vendorContinuityNeedsEveryChainDeviceMatched() {
         // Vendor sets are built only from matched regions, so an unmatched chain
         // device contributes nothing at all. A device inside it would then be
@@ -279,7 +268,8 @@ struct ChainDeviceAttributionTests {
         #expect(!result.allAnchored, "One chain device has no matching USB device")
         #expect(result.regionOwner[7] == nil, "The unanchored VIA hub must stay unplaced")
         #expect(result.regionOwner[8] == nil)
-        #expect(result.regionOwner[3] == 300, "The structural pass is unaffected and still places the dock's own subtree")
+        #expect(result.regionOwner[3] == nil, "The Billboard's name does not pass the dock to its Fresco hub")
+        #expect(result.regionOwner[4] == 300, "The Billboard itself is the dock's identity device")
     }
 
     @Test("A vendor in two chain devices' regions places nothing")
@@ -301,7 +291,7 @@ struct ChainDeviceAttributionTests {
         #expect(result.regionOwner[6] == nil)
     }
 
-    @Test("The structural pass always wins over vendor continuity")
+    @Test("A hub under a display placed only by name, with a vendor in the dock's set, is placed by neither")
     func structuralBeatsVendor() {
         // A hub inside the display's anchored region whose vendor belongs to the
         // dock's set. Structure is direct evidence and the vendor is not, so the
@@ -316,10 +306,11 @@ struct ChainDeviceAttributionTests {
             device(id: 6, locationID: 0x0322_0000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "USB3.1 Hub", isHub: true),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionOwner[3] == 200, "Nested inside the display's marked hub, so it is the display's")
+        #expect(result.regionOwner[1] == nil, "The display's name does not pass to its hub")
+        #expect(result.regionOwner[3] == nil, "So the hub below it is placed by nothing")
     }
 
-    @Test("Vendor continuity stays off when a chain device matched a name but holds no region")
+    @Test("A hub two docks both name is not handed to a third by its vendor")
     func vendorGateKeysOnRegionsNotNames() {
         // Found by an adversarial review, and it is the shared-hub guard being
         // walked around rather than broken. Three chain devices: Alpha and Beta
@@ -349,13 +340,13 @@ struct ChainDeviceAttributionTests {
             device(id: 5, locationID: 0x0321_0000, vendorID: 0x2222, vendor: "Other", product: "Gamma Dock", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(!result.allAnchored, "Alpha and Beta matched a name but hold no region, so the gate must stay shut")
         #expect(result.regionOwner[1] == nil, "The disputed hub belongs to none of them")
         #expect(result.regionOwner[6] == nil, "And nothing under it may be handed to Gamma")
-        #expect(result.regionRoots[4] == 400, "Gamma's own region is unaffected")
+        #expect(result.regionRoots[5] == 400, "Gamma's identity endpoint marks only itself")
+        #expect(result.regionOwner[4] == nil, "Gamma's hub gains nothing from a name")
     }
 
-    @Test("A hub two chain devices both named stays unowned even when the vendor gate opens")
+    @Test("A hub two chain devices both named stays unowned, and so does everything inside it")
     func contestedHubIsOffLimitsToVendorContinuity() {
         // The re-verification finding, and the reason the region-based gate alone
         // was not enough. Alpha and Beta both name endpoints on hub 1, so it is
@@ -393,14 +384,14 @@ struct ChainDeviceAttributionTests {
             device(id: 10, locationID: 0x0341_0000, vendorID: 0x1E91, vendor: "OWC", product: "Beta Dock", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.allAnchored, "Every chain device does hold a region here, so the gate opens")
         #expect(result.regionOwner[1] == nil, "The disputed hub must belong to none of them")
         #expect(result.regionOwner[6] == nil, "Nor may anything inside it be claimed on vendor evidence")
-        #expect(result.regionRoots[4] == 400, "Gamma's own region is untouched")
-        #expect(result.regionRoots[7] == 200, "And so is Alpha's second region")
+        #expect(result.regionRoots[5] == 400, "Gamma's identity endpoint marks itself")
+        #expect(result.regionRoots[8] == 200, "And so does Alpha's second one")
+        #expect(result.regionOwner[4] == nil && result.regionOwner[7] == nil, "No hub gains a box from a name")
     }
 
-    @Test("A disputed hub inside an anchored region still inherits that region, and that is correct")
+    @Test("A disputed hub under a display placed only by name goes to the separate tree")
     func contestedSubtreeStillInheritsItsEnclosingRegion() {
         // Raised in review as a third wrong-parent route and REJECTED after
         // working through what the two attributions actually claim. Pinned here so
@@ -466,15 +457,18 @@ struct ChainDeviceAttributionTests {
             device(id: 6, locationID: 0x0312_3000, vendorID: 0x0BDA, vendor: "Realtek", product: "USB 10/100/1000 LAN", isHub: false),
         ]
         let result = resolve(chain, devices)
+        // Superseded 2026-10-08: the display's own hub is no longer marked by
+        // its identity endpoint's name, so there is no enclosing region to
+        // inherit. Unplaced is the evidence-only answer.
         #expect(result.regionRoots[3] == nil, "The disputed hub is still marked for neither dock")
-        #expect(result.regionOwner[3] == 200, "But it is inside the display, and saying so is true")
-        #expect(result.regionOwner[6] == 200, "As is the adapter behind it")
+        #expect(result.regionOwner[3] == nil)
+        #expect(result.regionOwner[6] == nil)
         // What must NOT happen is a claim of containment that is false.
         #expect(result.regionOwner[6] != 300)
         #expect(result.regionOwner[6] != 400)
     }
 
-    @Test("A generically named chain device cannot steal a device an exact match already placed")
+    @Test("A generically named chain device places nothing")
     func affiliateMatchCannotOverrideAnExactMatch() {
         // Also from the adversarial review. A chain device whose model name is one
         // generic word clears the three-character floor, and "Hub" word-matches
@@ -498,8 +492,8 @@ struct ChainDeviceAttributionTests {
             device(id: 4, locationID: 0x0311_1000, vendorID: 0x046D, vendor: "Logitech", product: "Webcam", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionOwner[3] == 200, "The hub is nested inside the display's region and stays there")
-        #expect(result.regionOwner[4] == 200, "And so does the device behind it")
+        #expect(result.regionOwner[3] == nil, "A word match to \"Hub\" is not evidence")
+        #expect(result.regionOwner[4] == nil, "And the display's name does not pass to its hub")
         #expect(result.regionRoots[3] == nil, "No region may be opened for the generically named dock here")
     }
 
@@ -533,8 +527,9 @@ struct ChainDeviceAttributionTests {
         //    stops at the first marked ancestor it meets.
         //
         // What hangs is a marked node whose parent chain leads into a cycle none
-        // of whose members is marked. Here id 1 is marked (a hub that names the
-        // dock, so it roots the region itself) and ids 2 and 3 are each other's
+        // of whose members is marked. Here id 1 is marked (the dock's own
+        // identity endpoint, named exactly like the dock; not a hub, since an
+        // identity hub is not marked) and ids 2 and 3 are each other's
         // parent: node id 2 has children 1 and 3, and node id 3 has child 2.
         // The chain is deliberately only half matched, so vendor continuity
         // cannot run and mark a cycle member on the way past.
@@ -542,14 +537,14 @@ struct ChainDeviceAttributionTests {
         // If this regresses, the symptom is this test never finishing.
         let devices = [
             device(id: 2, locationID: 0x0310_0000, vendorID: 0x8087, vendor: "Intel", product: "USB3 HUB", isHub: true),
-            device(id: 1, locationID: 0x0311_0000, vendorID: 0x2B89, vendor: "UGREEN", product: "TBT5 Docking Station 10-in-1", isHub: true),
+            device(id: 1, locationID: 0x0311_0000, vendorID: 0x2B89, vendor: "UGREEN", product: "TBT5 Docking Station 10-in-1", isHub: false),
             device(id: 3, locationID: 0x0312_0000, vendorID: 0x8087, vendor: "Intel", product: "USB3 HUB", isHub: true),
             device(id: 3, locationID: 0x0320_0000, vendorID: 0x8087, vendor: "Intel", product: "USB3 HUB", isHub: true),
             device(id: 2, locationID: 0x0321_0000, vendorID: 0x8087, vendor: "Intel", product: "USB3 HUB", isHub: true),
         ]
         let result = resolve(twoDeviceChain(), devices)
         #expect(!result.allAnchored, "Only the dock is named, so vendor continuity must be off")
-        #expect(result.regionRoots[1] == 300, "The hub that names the dock still roots its region")
+        #expect(result.regionRoots[1] == 300, "The dock's identity endpoint still marks its own box")
     }
 
     @Test("A device with no product name matches nothing")
@@ -558,30 +553,35 @@ struct ChainDeviceAttributionTests {
         #expect(resolve(oneDeviceChain(), devices).isEmpty)
     }
 
-    @Test("Two matches for one chain device, nested, mark only the outer hub")
+    @Test("Two marks for one chain device, nested, keep only the outer one")
     func nestedSameOwnerMarksAreCollapsed() {
-        // A CalDigit dock publishes `TS5 USB 3 Hub` (a hub, which marks itself)
-        // and `CalDigit TS5 Audio - Rear` (an endpoint further in, which marks
-        // the hub it hangs off). Both name the same chain device, and the second
-        // hub is inside the first. Keeping both marks renders that subtree twice
-        // in the expanded view: once inside its ancestor and once as a region of
-        // its own.
+        // The outer hub is placed in the dock by position (the USB-tunnel
+        // depth join), and the dock's own identity endpoint, named exactly
+        // like the dock, sits further in. Both mark the same chain device, and
+        // the endpoint is inside the hub. Keeping both marks renders that
+        // subtree twice in the expanded view: once inside its ancestor and
+        // once as a region of its own. The outer hub also carries the dock's
+        // name, which agrees with its position and so changes nothing.
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(id: 200, parent: 100, vendor: "CalDigit", model: "TS5", depth: 1)
         let chain = ThunderboltTopology.tree(from: root, in: [root, dock])
         let devices = [
-            device(id: 1, locationID: 0x0310_0000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "TS5 USB 3 Hub", isHub: true),
+            tunnelledDevice(id: 1, locationID: 0x0310_0000, bridgeDepth: 2, product: "TS5", isHub: true),
             device(id: 2, locationID: 0x0311_0000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "USB2.0 Hub", isHub: true),
-            device(id: 3, locationID: 0x0311_1000, vendorID: 0x0D8C, vendor: "CalDigit", product: "CalDigit TS5 Audio - Rear", isHub: false),
+            device(id: 3, locationID: 0x0311_1000, vendorID: 0x0D8C, vendor: "CalDigit", product: "TS5", isHub: false),
         ]
-        let result = resolve(chain, devices)
+        let result = ChainDeviceAttribution.resolve(
+            chain: chain, forest: USBDeviceNode.buildTree(from: devices),
+            usbTunnelSwitchUIDs: [200], expectedTunnelRootName: "apciec2"
+        )
         #expect(result.regionRoots[1] == 200, "The outer hub roots the dock's region")
         #expect(result.regionRoots[2] == nil, "The inner hub adds nothing: its subtree already inherits the dock")
+        #expect(result.regionRoots[3] == nil, "The endpoint's own mark sits inside the outer one, so it is dropped")
         #expect(result.regionOwner[2] == 200, "Ownership is unaffected, only the redundant mark is gone")
         #expect(result.regionOwner[3] == 200)
     }
 
-    @Test("A hub that names a chain device claims itself, not its parent")
+    @Test("A hub that names a chain device marks neither itself nor its parent: identity evidence does not place a hub")
     func hubAnchorClaimsItself() {
         let devices = [
             device(id: 1, locationID: 0x0310_0000, vendorID: 0x05AC, vendor: "Apple", product: "USB2.0 Hub", isHub: true),
@@ -589,9 +589,11 @@ struct ChainDeviceAttributionTests {
             device(id: 3, locationID: 0x0311_1000, vendorID: 0x0BDA, vendor: "Realtek", product: "USB 10/100/1000 LAN", isHub: false),
         ]
         let result = resolve(oneDeviceChain(), devices)
-        #expect(result.regionRoots[2] == 200, "The hub IS the dock, so it roots the region itself")
+        #expect(result.regionRoots[2] == nil, "No position evidence places the hub, so its name alone marks nothing")
         #expect(result.regionRoots[1] == nil, "Its parent hub belongs to nothing in particular")
-        #expect(result.regionOwner[3] == 200)
+        #expect(result.regionOwner[3] == nil, "Nothing below the hub is placed by the hub's name")
+        #expect(!result.absorbed.contains(2), "An unmarked hub is not collapsed into the box row")
+        #expect(result.isEmpty)
     }
 
     // MARK: - #493: a lone claim over a shared hub, numeric-first
@@ -602,7 +604,7 @@ struct ChainDeviceAttributionTests {
     /// the ordinary case the promotion exists for, and it must still work.
     /// No numeric DROM data on this fixture, so it resolves entirely on tier
     /// (d), the string fallback.
-    @Test("A single same-brand chain device still promotes onto its own hub")
+    @Test("A single same-brand chain device does not promote onto its hub on a vendor string")
     func singleChainDeviceSameBrandStillPromotes() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(id: 200, parent: 100, vendor: "OWC", model: "OWC Dock", depth: 1)
@@ -612,8 +614,9 @@ struct ChainDeviceAttributionTests {
             device(id: 2, locationID: 0x0311_0000, vendorID: 0x1E91, vendor: "OWC", product: "OWC Dock", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[1] == 200,
-            "With only one chain device on the fabric, its own hub still gets claimed")
+        #expect(result.regionRoots[1] == nil,
+            "A shared vendor string is not evidence the hub is the dock's")
+        #expect(result.regionRoots[2] == 200, "The claim stays on the identity endpoint")
         #expect(result.absorbed.contains(2),
             "The exact name match still absorbs the dock's own identity endpoint")
     }
@@ -629,7 +632,7 @@ struct ChainDeviceAttributionTests {
     /// the residual same-brand ambiguity it protects against; real hardware
     /// in this shape almost always also carries a numeric identity, which
     /// resolves it correctly in an earlier tier (see the two tests below).
-    @Test("Tier (d): a same-brand lone claim promotes when no numeric evidence exists at all")
+    @Test("Tier (d) is gone: a same-brand lone claim stays on the device without numeric evidence")
     func tierDSameBrandLoneClaimPromotesWithoutNumericEvidence() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(id: 200, parent: 100, vendor: "OWC", model: "OWC Dock", depth: 1)
@@ -640,8 +643,9 @@ struct ChainDeviceAttributionTests {
             device(id: 2, locationID: 0x0311_0000, vendorID: 0x1E91, vendor: "OWC", product: "OWC Drive", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[1] == 300,
-            "No numeric evidence anywhere: the hub vendor name matching the claimer promotes, per tier (d)")
+        #expect(result.regionRoots[1] == nil,
+            "No numeric evidence anywhere, so the hub is not promoted")
+        #expect(result.regionRoots[2] == 300)
     }
 
     /// Tier (d), STRING fallback, the ORIGINAL #493 shape with no numeric DROM
@@ -667,9 +671,11 @@ struct ChainDeviceAttributionTests {
             "The CalDigit hub must not be claimed by the OWC drive")
     }
 
-    /// Tier (a): the hub's OWN idVendor/idProduct exactly identify it as the
-    /// CLAIMING chain device's DROM. Decisive, no string ever read.
-    @Test("Tier (a): a hub that numerically identifies as the claiming chain device promotes")
+    /// Former tier (a): the hub's OWN idVendor/idProduct exactly identify it
+    /// as the claiming chain device's DROM. Identity evidence places only the
+    /// identity device, so neither the hub's own numbers nor the endpoint's
+    /// claim below it places the hub.
+    @Test("Tier (a) is gone: a hub that numerically identifies as the claiming chain device is not promoted onto")
     func tierAHubNumericallyIdentifiesAsClaimerPromotes() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(
@@ -683,20 +689,44 @@ struct ChainDeviceAttributionTests {
             // unrelated ("Unrelated Inc"), so a string-based rule would have
             // refused this; the numeric tier does not consult it at all.
             device(id: 1, locationID: 0x0310_0000, vendorID: 0x1000, productID: 0x2000, vendor: "Unrelated Inc", product: "Hub", isHub: true),
-            // An affiliate match (not exact) so the endpoint is a distinct
-            // accessory from the dock's own identity, with no numeric
-            // identity of its own.
-            device(id: 2, locationID: 0x0311_0000, vendorID: 0x9999, productID: 0x8888, vendor: "Widget Co", product: "Widget Dock Audio", isHub: false),
+            // The dock's identity endpoint by exact name, on that hub.
+            device(id: 2, locationID: 0x0311_0000, vendorID: 0x9999, productID: 0x8888, vendor: "Widget Co", product: "Widget Dock", isHub: false),
+            // Another device on the same hub, with no evidence of its own.
+            device(id: 3, locationID: 0x0312_0000, vendorID: 0x1A2C, productID: 0x0005, vendor: nil, product: "Keyboard", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[1] == 200,
-            "The hub's own numeric identity says it IS the dock, so it is promoted")
+        #expect(result.regionRoots[1] == nil,
+            "Neither the hub's own numbers nor the endpoint's claim places the hub")
+        #expect(result.regionOwner[3] == nil, "The hub's other device is not carried into the dock")
+        #expect(result.regionRoots[2] == 200, "The claim stays on the identity endpoint")
+        #expect(result.absorbed == [2])
     }
 
-    /// Tier (b): the hub's OWN idVendor/idProduct exactly identify it as a
-    /// DIFFERENT chain device than the one naming it. Decisive leaf, no
-    /// string ever read, even though nothing here uses matching brand names.
-    @Test("Tier (b): a hub that numerically identifies as a DIFFERENT chain device stays on the leaf")
+    /// A box's identity device found by DROM numbers alone (its name does not
+    /// match the model name) is folded into the box row, like an exact-name one.
+    @Test("A device matching only the box's DROM numbers is absorbed and owned by that box")
+    func numericIdentityDeviceIsAbsorbed() {
+        let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
+        let dock = chainSwitch(
+            id: 200, parent: 100, vendor: "Widget Co", model: "Widget Dock", depth: 1,
+            dromVendorID: 0x1000, dromModelID: 0x2000
+        )
+        let chain = ThunderboltTopology.tree(from: root, in: [root, dock])
+        let devices = [
+            // Numbers equal the dock's DROM pair; the product name does not
+            // equal the model name, so only the numeric identity matches.
+            device(id: 1, locationID: 0x0310_0000, vendorID: 0x1000, productID: 0x2000, vendor: "Unrelated Inc", product: "Chip Controller", isHub: false),
+        ]
+        let result = resolve(chain, devices)
+        #expect(result.regionOwner[1] == 200, "the dock owns its numeric identity device")
+        #expect(result.absorbed.contains(1), "the numeric identity device is absorbed into the box row")
+    }
+
+    /// Former tier (b): the hub's OWN idVendor/idProduct exactly identify it
+    /// as a DIFFERENT chain device than the one the endpoint partly names.
+    /// A hub is not marked by its own numbers without position evidence, so
+    /// it is placed in neither box.
+    @Test("Tier (b): a hub whose numbers are a DIFFERENT chain device's DROM pair is placed in neither box")
     func tierBHubNumericallyIdentifiesAsDifferentChainDeviceStaysOnLeaf() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dockA = chainSwitch(
@@ -715,18 +745,19 @@ struct ChainDeviceAttributionTests {
             device(id: 2, locationID: 0x0311_0000, vendorID: 0x9999, productID: 0x8888, vendor: "Alpha Co", product: "Alpha Dock Audio", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[2] == 200,
-            "The claiming endpoint's own claim stays on itself")
+        #expect(result.regionRoots[2] == nil,
+            "A partial name places nothing")
         #expect(result.regionRoots[1] == nil,
-            "The hub's own numeric identity says it belongs to Dock B, not Dock A, so it is refused")
+            "The hub's own numbers are Dock B's DROM pair, but a hub is placed by position evidence only")
+        #expect(result.isEmpty, "Nothing places the hub in Dock A or Dock B")
     }
 
-    /// Tier (c), promote branch: the CLAIMING ENDPOINT is numerically
+    /// Former tier (c), promote branch: the CLAIMING ENDPOINT is numerically
     /// identified, the hub itself is not, but the hub's VID equals the
-    /// claiming chain device's own DROM VID. This is the multi-chip-dock
-    /// pattern: the hub is one of the dock's own internal chips, sharing the
-    /// chassis VID but carrying its own model id.
-    @Test("Tier (c): a hub sharing the claiming chain device's VID (but not its PID) promotes")
+    /// claiming chain device's own DROM VID (the multi-chip-dock pattern).
+    /// A shared VID is not position evidence, so the claim stays on the
+    /// endpoint and the hub's other devices are not carried with it.
+    @Test("Tier (c) is gone: a hub sharing the claiming chain device's VID (but not its PID) is not promoted onto")
     func tierCHubVIDMatchesClaimingChainDevicePromotes() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(
@@ -742,10 +773,39 @@ struct ChainDeviceAttributionTests {
             // The claiming endpoint IS numerically identified: exact VID+PID
             // match to the dock's own DROM.
             device(id: 2, locationID: 0x0311_0000, vendorID: 0x1000, productID: 0x2000, vendor: "Widget Co", product: "Widget Dock", isHub: false),
+            // Another device on the same hub, with no evidence of its own.
+            device(id: 3, locationID: 0x0312_0000, vendorID: 0x1A2C, productID: 0x0005, vendor: nil, product: "Keyboard", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[1] == 200,
-            "The hub's VID matches the claiming chain device's DROM VID, so it promotes")
+        #expect(result.regionRoots[1] == nil,
+            "A shared VID does not place the hub")
+        #expect(result.regionOwner[3] == nil, "The hub's other device is not carried into the dock")
+        #expect(result.regionRoots[2] == 200, "The claim stays on the identity endpoint")
+        #expect(result.absorbed == [2])
+    }
+
+    @Test("Two boxes, no USB2 pairing: an identity claim is not promoted onto the first box's USB2 hub, so the next box's USB2 side stays out of it")
+    func identityPromotionOntoUSB2HubRefusedWhenPairingFails() {
+        // Made-up numbers. Box A (200) then box B (300), no Container IDs, so
+        // the USB2 pairing returns empty. A's identity endpoint (VID:PID =
+        // A's DROM pair) sits under A's USB2 hub, whose VID is A's DROM
+        // vendor only: tier (c) would promote the claim onto that hub. USB2
+        // is not tunnelled, so B's USB2 hub hangs under A's USB2 hub.
+        let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
+        let boxA = chainSwitch(id: 200, parent: 100, vendor: "Vendor A", model: "Box A Dock", depth: 1, dromVendorID: 0x3A22, dromModelID: 0x0043)
+        let boxB = chainSwitch(id: 300, parent: 200, vendor: "Vendor B", model: "Box B Display", depth: 2, dromVendorID: 0x3A11, dromModelID: 0x0042)
+        let chain = ThunderboltTopology.tree(from: root, in: [root, boxA, boxB])
+        let devices = [
+            device(id: 1, locationID: 0x0310_0000, vendorID: 0x3A22, productID: 0x0001, vendor: nil, product: nil, isHub: true, speed: 2),
+            device(id: 2, locationID: 0x0311_0000, vendorID: 0x3A22, productID: 0x0043, vendor: nil, product: nil, isHub: false, speed: 2),
+            device(id: 3, locationID: 0x0312_0000, vendorID: 0x1A2B, productID: 0x0004, vendor: nil, product: nil, isHub: true, speed: 2),
+            device(id: 4, locationID: 0x0312_1000, vendorID: 0x1A2C, productID: 0x0005, vendor: "Camco", product: "Camera", isHub: false, speed: 2),
+        ]
+        let result = resolve(chain, devices)
+        #expect(result.regionOwner[3] != 200, "box B's USB2 hub must not inherit box A")
+        #expect(result.regionOwner[4] != 200, "a device behind box B's USB2 hub must not inherit box A")
+        #expect(result.regionOwner[1] == nil, "the claim is not promoted onto A's USB2 hub")
+        #expect(result.regionOwner[2] == 200, "the claim stays on the identity device itself")
     }
 
     /// Tier (c), leaf branch: the numeric replay of the #493 bug itself. The
@@ -787,7 +847,7 @@ struct ChainDeviceAttributionTests {
     /// requires the endpoint to BE numerically identified), and the decision
     /// falls straight through to the string tier, unaffected by the
     /// mismatched number.
-    @Test("A numeric VID mismatch alone does not force a leaf; the string tier decides")
+    @Test("A numeric VID mismatch alone neither forces nor allows a promotion")
     func numericVIDMismatchAloneDoesNotForceLeaf() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let dock = chainSwitch(
@@ -806,8 +866,9 @@ struct ChainDeviceAttributionTests {
             device(id: 2, locationID: 0x0311_0000, vendorID: 0x174C, productID: 0x2465, vendor: "OWC", product: "OWC Drive", isHub: false),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[1] == 200,
-            "No numeric identity either way, so the string tier decides: hub vendor matches the claimer, promotes")
+        #expect(result.regionRoots[1] == nil,
+            "No numeric identity either way, and a vendor string is not evidence: the hub is not promoted")
+        #expect(result.regionRoots[2] == 200, "The exact name still marks the drive's own endpoint")
     }
 
     // MARK: - #493 round 5: hardening findings
@@ -858,8 +919,8 @@ struct ChainDeviceAttributionTests {
         // name match's own chain device, dockB (300).
         #expect(result.regionRoots[1] != 200,
             "The ambiguous numeric identity must never resolve to the unrelated dock just because it came first")
-        #expect(result.regionRoots[1] == 300,
-            "With numeric identity refused as ambiguous, the name match (dockB) decides")
+        #expect(result.regionRoots[1] == nil,
+            "With numeric identity refused as ambiguous, a partial name places nothing")
     }
 
     /// Tier (c)'s own ambiguity case: the hub's VID matches TWO different
@@ -931,7 +992,12 @@ struct ChainDeviceAttributionTests {
     /// early `if node.device.isHub { return deviceID }` path used the raw
     /// NAME-matched switch id because `effectiveSwitchID` was computed AFTER
     /// it; the promised numeric correction never reached this path.
-    @Test("Item 2: a hub-claimant's own numeric identity overrides a disagreeing name match")
+    ///
+    /// Under the identity rule a hub claimant is marked only where position
+    /// already places it in the claim's box. Here nothing places the hub, so
+    /// it is placed in neither box. The override itself is pinned by the
+    /// parentless test below and by Item 4.
+    @Test("Item 2: a hub claimant whose name and numbers name different chain devices is placed in neither")
     func hubClaimantNumericIdentityOverridesNameMatch() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let x = chainSwitch(
@@ -949,8 +1015,9 @@ struct ChainDeviceAttributionTests {
             device(id: 1, locationID: 0x0310_0000, vendorID: 0x3000, productID: 0x4000, vendor: "X Co", product: "X Hub", isHub: true),
         ]
         let result = resolve(chain, devices)
-        #expect(result.regionRoots[1] == 300,
-            "A hub's own numeric identity (Y) must win over the name match that proposed X")
+        #expect(result.regionRoots[1] == nil,
+            "A hub is not marked by its name (X) or its numbers (Y) without position evidence")
+        #expect(result.isEmpty)
     }
 
     /// Item 2: a device with NO hub parent at all (a top-level / bare
@@ -1015,7 +1082,7 @@ struct ChainDeviceAttributionTests {
         // that matters is the hub's numeric identity was never treated as a
         // match; verified indirectly via the zero-VID test below, which
         // isolates the case where the string tier would NOT rescue it.
-        #expect(result.regionRoots[1] == 200)
+        #expect(result.regionRoots[1] == nil, "No numbers and no string tier: nothing promotes the hub")
     }
 
     /// Same zero case, but with nothing for the string tier to rescue: the
@@ -1062,21 +1129,17 @@ struct ChainDeviceAttributionTests {
         // not promote it there either.
         #expect(result.regionRoots[1] == nil,
             "A 0/0 'numeric match' must never promote the hub onto the unrelated chain device")
-        #expect(result.regionRoots[2] == 200,
-            "The claimant's own claim stays on itself, on its real name match")
+        #expect(result.regionRoots[2] == nil,
+            "A partial name places nothing, and a 0/0 pair is not a numeric identity")
     }
 
-    /// Item 4: the switchID-override half of the (target, switchID) tuple is
-    /// what makes the numeric correction actually visible to the CALLER
-    /// (`marks()`'s grouping and the region roots it produces), not just to
-    /// `claimTarget`'s own internal promote/leaf decision. This test is
-    /// built so disabling the override (using the raw name-matched switchID
-    /// instead of `effectiveSwitchID` everywhere) flips its own PROMOTE
-    /// decision to a LEAF, which is a clean, mechanically checkable failure
-    /// mode: proven red separately by mutating `effectiveSwitchID` in
-    /// production and re-running this test (see the PR description for the
-    /// captured failure).
-    @Test("Item 4: the switch id a promoted claim is recorded under reflects numeric identity, not the name match")
+    /// Item 4: the numeric correction (numbers beat the name) is what the
+    /// region root is recorded under, for an identity endpoint that hangs on
+    /// a hub. Built so disabling the override (using the name-matched box in
+    /// `claimedBox`) records the endpoint under X instead of Y. The hub's own
+    /// numbers are Y's too, and it is still not marked: identity evidence
+    /// places only the identity device.
+    @Test("Item 4: the switch id an identity claim is recorded under reflects numeric identity, not the name match")
     func switchIDOverrideIsRecordedNotJustCheckedInternally() {
         let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
         let x = chainSwitch(
@@ -1089,19 +1152,17 @@ struct ChainDeviceAttributionTests {
         )
         let chain = ThunderboltTopology.tree(from: root, in: [root, x, y])
         let devices = [
-            // Hub's own idVendor/idProduct exactly identify it as Y (tier a).
+            // Hub's own idVendor/idProduct exactly identify it as Y.
             device(id: 1, locationID: 0x0310_0000, vendorID: 0x3000, productID: 0x4000, vendor: "Unrelated Inc", product: "Hub", isHub: true),
-            // The endpoint is an AFFILIATE name match to X ("X Dock" ->
-            // switch 200 proposed), but its own idVendor/idProduct exactly
-            // match Y too.
-            device(id: 2, locationID: 0x0311_0000, vendorID: 0x3000, productID: 0x4000, vendor: "X Co", product: "X Dock Audio", isHub: false),
+            // The endpoint is an EXACT name match to X ("X Dock" -> switch
+            // 200 proposed), but its own idVendor/idProduct exactly match Y.
+            device(id: 2, locationID: 0x0311_0000, vendorID: 0x3000, productID: 0x4000, vendor: "X Co", product: "X Dock", isHub: false),
         ]
         let result = resolve(chain, devices)
-        // With the override working: effectiveSwitchID is Y (300), the
-        // hub's own numeric identity is ALSO Y, tier (a) promotes, and the
-        // claim is grouped and recorded under 300, not the name match's 200.
-        #expect(result.regionRoots[1] == 300,
-            "The hub promotes under Y (300), the numerically corrected switch id, not X (200), the name match")
+        #expect(result.regionRoots[2] == 300,
+            "The claim is recorded under Y (300), the numerically corrected switch id, not X (200), the name match")
+        #expect(result.absorbed == [2])
+        #expect(result.regionRoots[1] == nil, "The hub is not marked, by its own numbers or by the claim below it")
     }
 
     // MARK: - Structural tunnel join
@@ -1193,14 +1254,14 @@ struct ChainDeviceAttributionTests {
         #expect(result.regionOwner[2] == 300, "ownership is unaffected, only the redundant mark is gone")
     }
 
-    @Test("A genuine structural/name disagreement fails closed: name placement is kept, but the device is not absorbed")
+    @Test("A genuine structural/name disagreement fails closed: neither signal places the device, and it is not absorbed")
     func structuralConflictWithNameMatchFailsClosed() {
         // A GENUINE disagreement: the device's own product name matches the
         // Studio Display exactly (name says 400), but its bridge depth
         // resolves to the LaCie (structural says 300). Two strong signals
-        // that cannot both be right. Policy: keep the name placement, refuse
-        // the structural override, and do not treat this device as the
-        // chain device's own identity endpoint.
+        // that cannot both be right. Policy: place it by neither, leave it
+        // at port level, and do not treat it as the chain device's own
+        // identity endpoint.
         let chain = laCieStudioDisplayChain()
         let devices = [
             tunnelledDevice(id: 1, locationID: 0x0310_0000, bridgeDepth: 4, product: "Studio Display", isHub: false),
@@ -1210,8 +1271,73 @@ struct ChainDeviceAttributionTests {
             chain: chain, forest: forest,
             usbTunnelSwitchUIDs: [300, 400], expectedTunnelRootName: "apciec2"
         )
-        #expect(result.regionOwner[1] == 400, "the exact name match is kept: structural does not override it")
+        #expect(result.regionOwner[1] == nil, "neither the name match nor the structural depth places a device they disagree about")
+        #expect(result.portLevelBoundaries.contains(1), "the conflict is terminal: the device stays at port level")
         #expect(!result.absorbed.contains(1), "a device with disagreeing evidence is not collapsed into the chain row")
+    }
+
+    @Test("A tunnelled hub whose depth says box A but whose name says box B places nothing in B")
+    func usbTunnelNameConflictLeavesHubAndSubtreeUnplaced() {
+        // Box A (200) at depth 1, box B (300) at depth 2. Hub 2's bridge
+        // depth 2 places it structurally in A; its exact product name is B's
+        // model name. The two signals disagree, so neither may place it: a
+        // device in the wrong box is worse than one left at port level.
+        let chain = twoDeviceChain()
+        let devices = [
+            // The hub's own parent: an ordinary hub carrying no evidence.
+            device(id: 1, locationID: 0x0310_0000, vendorID: 0x1A2B, productID: 0x0001, vendor: "Hubco", product: "Generic Hub", isHub: true),
+            tunnelledDevice(id: 2, locationID: 0x0311_0000, bridgeDepth: 2, product: "TBT5 Docking Station 10-in-1", isHub: true),
+            device(id: 3, locationID: 0x0311_1000, vendorID: 0x1A2C, productID: 0x0002, vendor: "Readerco", product: "Card Reader", isHub: false),
+        ]
+        let forest = USBDeviceNode.buildTree(from: devices)
+        let result = ChainDeviceAttribution.resolve(
+            chain: chain, forest: forest,
+            usbTunnelSwitchUIDs: [200, 300], expectedTunnelRootName: "apciec2"
+        )
+        #expect(result.regionOwner[2] != 300, "the conflicted hub must not land in the box its name points at")
+        #expect(result.regionOwner[3] != 300, "the conflicted hub's child must not land in the box its name points at")
+        #expect(result.regionOwner[1] != 300, "the conflicted hub's parent must not land in the box its name points at")
+        #expect(!result.absorbed.contains(2), "a device with disagreeing evidence is not collapsed into the chain row")
+        #expect(result.portLevelBoundaries.contains(2), "the conflict is terminal: the hub stays at port level")
+        #expect(result.regionOwner[2] == nil && result.regionOwner[3] == nil, "neither signal places the hub or its child")
+    }
+
+    @Test("A tunnelled endpoint whose depth says box A but whose numbers say box B does not drag its parent hub into B")
+    func usbTunnelNumericConflictDoesNotPromoteOntoParentHub() {
+        // Made-up DROM numbers. Endpoint 2's idVendor/idProduct equal box
+        // B's DROM pair exactly; its bridge depth places it in box A. Its
+        // parent hub shares B's vendor ID only, which is the tier (c)
+        // promotion shape: before the fix, the numeric claim promoted onto
+        // the hub and carried the unrelated sibling 3 into B with it.
+        let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
+        let boxA = chainSwitch(id: 200, parent: 100, vendor: "Vendor A", model: "Box A Display", depth: 1, dromVendorID: 0x3A22, dromModelID: 0x0043)
+        let boxB = chainSwitch(id: 300, parent: 200, vendor: "Vendor B", model: "Box B Dock", depth: 2, dromVendorID: 0x3A11, dromModelID: 0x0042)
+        let chain = ThunderboltTopology.tree(from: root, in: [root, boxA, boxB])
+        let devices = [
+            device(id: 1, locationID: 0x0310_0000, vendorID: 0x3A11, productID: 0x0001, vendor: nil, product: nil, isHub: true),
+            USBDevice(
+                id: 2, locationID: 0x0311_0000, vendorID: 0x3A11, productID: 0x0042,
+                vendorName: nil, productName: nil, serialNumber: nil,
+                usbVersion: nil, speedRaw: 3, busPowerMA: nil, currentMA: nil,
+                isThunderboltTunnelled: true,
+                tunnelBridgeDepth: 2,
+                tunnelRootName: "apciec2",
+                tunnelCarrier: .usbTunnel,
+                deviceClass: 0x00,
+                rawProperties: [:]
+            ),
+            device(id: 3, locationID: 0x0312_0000, vendorID: 0x1A2D, productID: 0x0003, vendor: "Mouseco", product: "Mouse", isHub: false),
+        ]
+        let forest = USBDeviceNode.buildTree(from: devices)
+        let result = ChainDeviceAttribution.resolve(
+            chain: chain, forest: forest,
+            usbTunnelSwitchUIDs: [200, 300], expectedTunnelRootName: "apciec2"
+        )
+        #expect(result.regionOwner[1] != 300, "the parent hub must not be promoted into the box the endpoint's numbers name")
+        #expect(result.regionOwner[2] != 300, "the conflicted endpoint must not land in the box its numbers name")
+        #expect(result.regionOwner[3] != 300, "an unrelated sibling must not follow a promoted claim into that box")
+        #expect(!result.absorbed.contains(2), "a device with disagreeing evidence is not collapsed into the chain row")
+        #expect(result.portLevelBoundaries.contains(2), "the conflict is terminal: the endpoint stays at port level")
     }
 
     @Test("A tunnelled device with no bridge depth falls back to name matching")
@@ -1771,8 +1897,8 @@ struct ChainDeviceAttributionTests {
         #expect(result.regionOwner[12] == nil)
     }
 
-    @Test("TB5: a structural hub whose own NUMERIC identity disagrees is demoted to structurallyConflicted, not absorbed or forcedPortLevel")
-    func tb5NumericConflictDemotesToStructurallyConflicted() {
+    @Test("TB5: a structural hub whose own NUMERIC identity disagrees is left at port level, not absorbed or placed")
+    func tb5NumericConflictLeavesHubAtPortLevel() {
         // Review fix: the old body changed device 11's vendorID/productID to
         // Apple's numeric identity (1452/30978) to force a "conflict". That
         // removed it from the Intel silicon table (spec 3.2: vendorID must
@@ -1822,30 +1948,44 @@ struct ChainDeviceAttributionTests {
         // 0x03210000 climbs to 0x03200000, hub10's own locationID), which is
         // exactly the shape the TB5 pass exists to override: without it, hub
         // 11 would inherit the display purely from USB nesting. A
-        // `structurallyConflicted` demotion is not a `forcedPortLevel`
-        // boundary: it removes the TB5 claim but does not block plain
-        // inheritance, so once the claim is refused, hub 11 falls straight
-        // back to inheriting from hub10's own region (the display, 200).
-        // That is the SAME observable outcome as the exact-name-conflict
-        // case just above it in this file, reached for a different reason:
-        // there the display placement was the device's OWN evidence kept in
-        // preference to the conflicting structural one; here it is the
-        // fallback default with no placement of its own at all. Distinguishing
-        // the two is exactly why `regionRoots` is checked directly below,
-        // not just `regionOwner`.
-        #expect(result.regionOwner[11] == 200,
-            "with its TB5 claim refused, the hub falls back to inheriting hub10's region (the display), not the conflicting dock")
+        // `.tb5TunnelHubMap` conflict sends the hub to `forcedPortLevel`, a
+        // boundary: neither its numeric claim (the display) nor its route-map
+        // candidate (the dock) places it, and it does not inherit hub10's
+        // region either. The boundary is sticky, so the WD Game Drive below
+        // it stays unplaced too.
+        #expect(result.regionOwner[11] == nil,
+            "neither the numeric identity nor the route map places a hub they disagree about, and it does not inherit hub10's region")
         #expect(result.regionRoots[11] == nil,
-            "unlike the exact-name-conflict case, this device has no evidence of its own: 200 is inherited, not a region root")
-        #expect(result.regionOwner[11] != 300,
-            "the TB5-derived switch id must not win over a genuine numeric disagreement")
-        // Excluded from absorbed only (per `.tb5TunnelHubMap`'s precedence
-        // tier, spec 3.5): unlike `.pcieStageBMatch`, a conflict here never
-        // reaches `forcedPortLevel`.
+            "a forced hub is never a region root")
+        #expect(result.regionOwner[12] == nil,
+            "the boundary is sticky: the device below the forced hub stays unplaced")
+        #expect(result.regionOwner[10] == 200,
+            "hub10 keeps its own route-map placement in the display")
         #expect(!result.absorbed.contains(11),
             "a device with disagreeing structural and numeric evidence is not collapsed into the chain row")
-        #expect(!result.portLevelBoundaries.contains(11),
-            "a tb5TunnelHubMap conflict demotes to structurallyConflicted, never forcedPortLevel (that tier is Stage B's PCI-path proof)")
+        #expect(result.portLevelBoundaries.contains(11),
+            "a tb5TunnelHubMap conflict is terminal, the same as a Stage B one")
+    }
+
+    @Test("TB5: a tunnel hub the route map puts in the dock but whose name says display places nothing in the display")
+    func tb5NameConflictLeavesHubAndSubtreeUnplaced() {
+        // Hub 11 keeps its Intel TB5 silicon identity, so the route-map pass
+        // still runs and proposes the dock (300) for it. Its exact product
+        // name is the display's model name (200). The two disagree, so
+        // neither may place it. Hub 10 is its parent and is, in this
+        // two-box shape, the display's own tunnel hub by the route map, so
+        // it correctly stays with the display on its own evidence.
+        let chain = tb5TwoBoxChain()
+        var devices = tb5TunnelHubDevices()
+        devices[1] = device(id: 11, locationID: 0x0321_0000, vendorID: 0x8087, productID: 0x5787, vendor: "Intel Corporation", product: "Studio Display ", isHub: true)
+        let forest = USBDeviceNode.buildTree(from: devices)
+        let result = ChainDeviceAttribution.resolve(chain: chain, forest: forest, usbTunnelSwitchUIDs: [200, 300])
+        #expect(result.regionOwner[11] != 200, "the conflicted hub must not land in the box its name points at")
+        #expect(result.regionOwner[12] != 200, "the conflicted hub's child must not land in the box its name points at")
+        #expect(!result.absorbed.contains(11), "a device with disagreeing evidence is not collapsed into the chain row")
+        #expect(result.portLevelBoundaries.contains(11), "the conflict is terminal: the hub stays at port level")
+        #expect(result.regionOwner[11] == nil && result.regionOwner[12] == nil, "neither signal places the hub or its child")
+        #expect(result.regionOwner[10] == 200, "the parent hub keeps its own route-map placement in the display")
     }
 
     @Test("TB5: a forcedPortLevel boundary nested inside a TB5-attributed hub blocks inheritance, and the TB5 attribution elsewhere is unaffected")
@@ -1930,5 +2070,428 @@ struct ChainDeviceAttributionTests {
         #expect(result.portLevelBoundaries.contains(40), "fixture: device 40 must be the forced boundary")
         #expect(result.regionOwner[40] == nil, "a forcedPortLevel device never inherits ownership, even from a TB5-attributed parent hub")
         #expect(result.regionOwner[41] == nil, "the boundary is sticky: a device below a forced node stays unattributed too")
+    }
+
+    // MARK: - TB5 tunnel-hub mapping, one box on its own
+
+    /// A lone JHL9580 dock as the mini captured it: its own Intel USB3 hub at
+    /// the top of the port's USB3 tree, a drive and a VIA hub behind it.
+    private func loneDockUSB3Tree() -> [USBDevice] {
+        [
+            device(id: 11, locationID: 0x0120_0000, vendorID: 0x8087, productID: 0x5787, vendor: "Intel Corporation", product: "USB3 HUB", isHub: true),
+            device(id: 12, locationID: 0x0123_0000, vendorID: 0x1058, productID: 0x2653, vendor: "WD", product: "Game Drive", isHub: false),
+            device(id: 13, locationID: 0x0124_0000, vendorID: 0x2109, productID: 0x0822, vendor: "VIA Labs, Inc.", product: "USB3.1 Hub", isHub: true),
+        ]
+    }
+
+    @Test("TB5: a lone box whose USB tunnel the fabric confirms claims its top Intel hub")
+    func tb5LoneConfirmedBoxClaimsTopHub() {
+        let forest = USBDeviceNode.buildTree(from: loneDockUSB3Tree())
+        let result = ChainDeviceAttribution.resolve(chain: oneDeviceChain(), forest: forest, usbTunnelSwitchUIDs: [200])
+        #expect(result.regionRoots[11] == 200, "the dock's own tunnel hub is its region")
+        #expect(result.regionOwner[12] == 200, "the drive behind it is in the dock")
+        #expect(result.regionOwner[13] == 200, "and so is the VIA hub, nested, not hoisted")
+    }
+
+    @Test("TB5: a lone box with no confirmed USB tunnel keeps the scope gate closed")
+    func tb5LoneUnconfirmedBoxStaysClosed() {
+        let forest = USBDeviceNode.buildTree(from: loneDockUSB3Tree())
+        let result = ChainDeviceAttribution.resolve(chain: oneDeviceChain(), forest: forest, usbTunnelSwitchUIDs: [])
+        #expect(result.regionOwner[11] == nil, "without the fabric's word, a lone box claims nothing")
+    }
+
+    // Made-up Container IDs: the display (box 200, first) and the dock (box 300).
+    private static let displayCID = "11111111-2222-4333-8444-555555555555"
+    private static let dockCID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+    /// The tunnel hubs with Container IDs, plus each box's top USB2 hub: the
+    /// display's directly under the USB root, the dock's directly under it.
+    private func tb5PairedDevices() -> [USBDevice] {
+        var devices = tb5TunnelHubDevices().filter { $0.id != 10 && $0.id != 11 }
+        devices.append(device(id: 10, locationID: 0x0320_0000, vendorID: 0x8087, productID: 0x0B41, vendor: "Intel Corporation", product: nil, isHub: true, speed: 4, containerID: Self.displayCID))
+        devices.append(device(id: 11, locationID: 0x0321_0000, vendorID: 0x8087, productID: 0x5787, vendor: "Intel Corporation", product: nil, isHub: true, speed: 4, containerID: Self.dockCID))
+        devices.append(device(id: 20, locationID: 0x0310_0000, vendorID: 0x05AC, productID: 0x8013, vendor: "Apple", product: "USB2.0 Hub", isHub: true, speed: 2, containerID: Self.displayCID))
+        devices.append(device(id: 21, locationID: 0x0312_0000, vendorID: 0x1D5C, productID: 0x5801, vendor: "Fresco Logic, Inc.", product: "USB2.0 Hub", isHub: true, speed: 2, containerID: Self.dockCID))
+        return devices
+    }
+
+    @Test("A shared vendor ID places nothing, even on a port where every box is resolved on both sides")
+    func vendorIDPlacesNothingWhenStructureResolves() {
+        let chain = tb5TwoBoxChain()
+        var devices = tb5PairedDevices()
+        // A VIA hub inside the dock puts VIA in the dock's vendor set.
+        devices.append(device(id: 13, locationID: 0x0321_2000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "USB3.1 Hub", isHub: true))
+        // A VIA hub on its own root with no name and no Container ID. Only a
+        // vendor guess could place it, and both sides of both boxes are placed.
+        devices.append(device(id: 14, locationID: 0x0330_0000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "USB2.0 Hub", isHub: true))
+        let result = ChainDeviceAttribution.resolve(
+            chain: chain, forest: USBDeviceNode.buildTree(from: devices), usbTunnelSwitchUIDs: [200, 300]
+        )
+        #expect(result.regionOwner[21] == 300, "the pairing pass found the dock's top USB2 hub")
+        #expect(result.regionOwner[13] == 300, "structure places the VIA hub inside the dock")
+        #expect(result.regionOwner[14] == nil, "the unplaced VIA hub stays where it renders today instead of following its vendor")
+    }
+
+    @Test("When the USB2 pairing fails, a vendor ID still places nothing")
+    func vendorContinuityRunsWhenPairingDoesNot() {
+        let chain = tb5TwoBoxChain()
+        var devices = tb5TunnelHubDevices()
+        devices.append(device(id: 13, locationID: 0x0321_2000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "USB3.1 Hub", isHub: true))
+        // No Container IDs anywhere: structure placed every box on the USB3
+        // side, but no box has a top USB2 hub, so a vendor guess is still the
+        // only thing that can place this hub.
+        devices.append(device(id: 14, locationID: 0x0310_0000, vendorID: 0x2109, vendor: "VIA Labs, Inc.", product: "USB2.0 Hub", isHub: true))
+        let result = ChainDeviceAttribution.resolve(
+            chain: chain, forest: USBDeviceNode.buildTree(from: devices), usbTunnelSwitchUIDs: [200, 300]
+        )
+        #expect(result.regionOwner[13] == 300)
+        #expect(result.regionOwner[14] == nil, "the hub goes to the separate tree")
+    }
+
+    // MARK: - USB3 check on identity claims
+
+    /// Host root 100 -> box 200, a storage box modelled "Storage Box" with
+    /// DROM pair 0x1A2B/0x3C4D, publishing `adapters` as its port list.
+    private func usb3CheckChain(adapters: [AdapterType]) -> [IOThunderboltSwitchNode] {
+        let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
+        let box = IOThunderboltSwitch(
+            id: 200, className: "IOThunderboltSwitchType3", vendorID: 0x8086,
+            vendorName: "Storage Co", modelName: "Storage Box", routerID: 1,
+            depth: 1, routeString: 1, upstreamPortNumber: 1, maxPortNumber: 13,
+            supportedSpeed: SupportedSpeedMask(rawValue: 0xE),
+            ports: adapters.enumerated().map { index, type in
+                IOThunderboltPort(
+                    portNumber: index + 1, socketID: nil, adapterType: type,
+                    currentSpeed: nil, currentWidth: nil, targetWidth: nil,
+                    rawTargetSpeed: nil, linkBandwidthRaw: nil
+                )
+            },
+            parentSwitchUID: 100, dromVendorID: 0x1A2B, dromModelID: 0x3C4D
+        )
+        return ThunderboltTopology.tree(from: root, in: [root, box])
+    }
+
+    /// Lane and PCIe-up adapters only: the box carries no USB of its own.
+    private let laneAndPCIeOnly: [AdapterType] = [.lane, .lane, .pcieUp]
+
+    /// A USB bridge named exactly like the box, at `speed`. `pcieCarried`
+    /// marks it as reaching the Mac over a PCIe tunnel (a TB3 dock's own xHCI);
+    /// no root name, so the Stage A shortcut does not also place it.
+    private func storageBridge(
+        speed: UInt8,
+        vendorID: UInt16 = 0x0ABC,
+        productID: UInt16 = 0x0DEF,
+        product: String = "Storage Box",
+        pcieCarried: Bool = false
+    ) -> USBDevice {
+        USBDevice(
+            id: 2, locationID: 0x0310_0000, vendorID: vendorID, productID: productID,
+            vendorName: "Bridge Co", productName: product, serialNumber: nil,
+            usbVersion: nil, speedRaw: speed, busPowerMA: nil, currentMA: nil,
+            isThunderboltTunnelled: pcieCarried,
+            tunnelCarrier: pcieCarried ? .pcieTunnel : nil,
+            deviceClass: 0x00, rawProperties: [:]
+        )
+    }
+
+    private func resolveBridge(_ device: USBDevice, adapters: [AdapterType]) -> ChainDeviceAttribution {
+        ChainDeviceAttribution.resolve(
+            chain: usb3CheckChain(adapters: adapters),
+            forest: USBDeviceNode.buildTree(from: [device])
+        )
+    }
+
+    @Test("USB3 check: a SuperSpeed device named like a box with no USB3 adapter is not its identity device")
+    func usb3CheckRefusesSuperSpeedNameMatch() {
+        // The corpus case: a USB storage bridge on a dock, named exactly
+        // like a Thunderbolt storage box chained behind it. At SuperSpeed it
+        // came in through a USB3 path, and that box has none.
+        let result = resolveBridge(storageBridge(speed: 4), adapters: laneAndPCIeOnly)
+        #expect(result.regionOwner[2] == nil, "the claim is refused, so the device goes to the separate tree")
+        #expect(result.regionRoots.isEmpty)
+        #expect(result.absorbed.isEmpty, "a refused device is not folded into the box row")
+    }
+
+    @Test("USB3 check: the same device at High Speed keeps its claim")
+    func usb3CheckLeavesHighSpeedAlone() {
+        let result = resolveBridge(storageBridge(speed: 2), adapters: laneAndPCIeOnly)
+        #expect(result.regionOwner[2] == 200)
+        #expect(result.absorbed == [2])
+    }
+
+    @Test("USB3 check: a device carried over a PCIe tunnel keeps its claim")
+    func usb3CheckExemptsPCIeCarriedDevices() {
+        // A Thunderbolt 3 dock carries its USB over PCIe, so it publishes no
+        // USB3 adapter and its own SuperSpeed devices are still inside it.
+        let result = resolveBridge(storageBridge(speed: 4, pcieCarried: true), adapters: laneAndPCIeOnly)
+        #expect(result.regionOwner[2] == 200)
+        #expect(result.absorbed == [2])
+    }
+
+    @Test("USB3 check: a box with no published adapter list never refuses")
+    func usb3CheckNeedsAPublishedAdapterList() {
+        let result = resolveBridge(storageBridge(speed: 4), adapters: [])
+        #expect(result.regionOwner[2] == 200)
+        #expect(result.absorbed == [2])
+    }
+
+    @Test("USB3 check: a SuperSpeed numeric identity device on a box with no USB3 adapter is refused too")
+    func usb3CheckRefusesSuperSpeedNumericMatch() {
+        // Name matches nothing; the VID/PID equal the box's DROM pair.
+        let bridge = storageBridge(speed: 4, vendorID: 0x1A2B, productID: 0x3C4D, product: "Bridge")
+        let result = resolveBridge(bridge, adapters: laneAndPCIeOnly)
+        #expect(result.regionOwner[2] == nil)
+        #expect(result.absorbed.isEmpty)
+    }
+
+    @Test("USB3 check: a box that publishes a USB3 adapter keeps a SuperSpeed identity device")
+    func usb3CheckKeepsClaimWhenTheBoxHasUSB3() {
+        let result = resolveBridge(storageBridge(speed: 4), adapters: [.lane, .lane, .pcieUp, .usb3Up])
+        #expect(result.regionOwner[2] == 200)
+        #expect(result.absorbed == [2])
+    }
+
+    // MARK: - Where identity evidence meets position evidence
+
+    /// Made-up numbers throughout. Box A (200) is the first hop and box B
+    /// (300) hangs behind it, so B is the chain's last box and A is not.
+    private func twoBoxChain() -> [IOThunderboltSwitchNode] {
+        let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
+        let boxA = chainSwitch(id: 200, parent: 100, vendor: "Vendor A", model: "Box A Dock", depth: 1, dromVendorID: 0x3A22, dromModelID: 0x0043)
+        let boxB = chainSwitch(id: 300, parent: 200, vendor: "Vendor B", model: "Box B Display", depth: 2, dromVendorID: 0x3A11, dromModelID: 0x0042)
+        return ThunderboltTopology.tree(from: root, in: [root, boxA, boxB])
+    }
+
+    private func plain(
+        _ id: UInt64, _ locationID: UInt32, vendorID: UInt16, productID: UInt16,
+        product: String? = nil, isHub: Bool, speed: UInt8, containerID: String? = nil
+    ) -> USBDevice {
+        device(id: id, locationID: locationID, vendorID: vendorID, productID: productID,
+               vendor: nil, product: product, isHub: isHub, speed: speed, containerID: containerID)
+    }
+
+    /// A USB-tunnelled hub with its own numbers and Container ID.
+    private func tunnelledHub(
+        _ id: UInt64, _ locationID: UInt32, bridgeDepth: Int, vendorID: UInt16, productID: UInt16, containerID: String? = nil
+    ) -> USBDevice {
+        USBDevice(
+            id: id, locationID: locationID, vendorID: vendorID, productID: productID,
+            vendorName: nil, productName: nil, serialNumber: nil, usbVersion: nil,
+            speedRaw: 4, busPowerMA: nil, currentMA: nil,
+            isThunderboltTunnelled: true, tunnelBridgeDepth: bridgeDepth, tunnelRootName: "apciec2",
+            tunnelCarrier: .usbTunnel, deviceClass: 0x09, containerID: containerID, rawProperties: [:]
+        )
+    }
+
+    @Test("A numeric claim promoted onto a hub that position places in another box yields: the hub keeps its box, the endpoint keeps its own, and nothing is hidden in the wrong box")
+    func promotionOntoAPositionedHubYieldsToPosition() {
+        // Hub 1 is tunnelled at bridge depth 4, so position puts it in B.
+        // Its VID is A's DROM vendor only (tier c). Endpoint 2 under it has
+        // A's DROM pair, so its claim would promote onto hub 1 for A. Before
+        // the rule, the promotion was recorded and then silently overwritten
+        // by the structural merge: endpoint 2 inherited B and was absorbed,
+        // so A's own identity device sat hidden inside B's row.
+        let devices = [
+            tunnelledHub(1, 0x0310_0000, bridgeDepth: 4, vendorID: 0x3A22, productID: 0x0001),
+            plain(2, 0x0311_0000, vendorID: 0x3A22, productID: 0x0043, isHub: false, speed: 3),
+            plain(3, 0x0312_0000, vendorID: 0x1A2D, productID: 0x0003, product: "Mouse", isHub: false, speed: 2),
+        ]
+        let result = ChainDeviceAttribution.resolve(
+            chain: twoBoxChain(), forest: USBDeviceNode.buildTree(from: devices),
+            usbTunnelSwitchUIDs: [200, 300], expectedTunnelRootName: "apciec2"
+        )
+        #expect(result.regionOwner[1] == 300, "position places the hub in B, and an identity promotion cannot move it")
+        #expect(result.regionRoots[1] == 300)
+        #expect(result.regionOwner[3] == 300, "the hub's other child follows the hub")
+        #expect(result.regionOwner[2] == 200, "A's identity device stays A's, on its own")
+        #expect(result.regionRoots[2] == 200, "the claim fell back to the identity device itself")
+        #expect(result.absorbed == [2], "only the identity device is absorbed, and only into its own box")
+        #expect(result.portLevelBoundaries.isEmpty, "nothing here contradicts itself")
+    }
+
+    @Test("A first box's own SuperSpeed hub carrying its numbers marks nothing when the TB5 map did not place the box behind it")
+    func numericHubClaimantOnAFirstBoxIsRefusedWhenTheUSB3SideIsUnbounded() {
+        // Hub 1 (SuperSpeed) carries A's DROM pair: a hub claimant. Hub 2
+        // under it is B's SuperSpeed hub with a drive on it, and no TB5 map
+        // placed it. Marking hub 1 for A would carry B's whole USB3 side
+        // into A, the USB3 twin of the USB2 case the pairing guards.
+        let devices = [
+            plain(1, 0x0320_0000, vendorID: 0x3A22, productID: 0x0043, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(2, 0x0321_0000, vendorID: 0x1A2B, productID: 0x0B41, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(3, 0x0321_1000, vendorID: 0x1A2C, productID: 0x0006, product: "SSD", isHub: false, speed: 4),
+        ]
+        let result = resolve(twoBoxChain(), devices)
+        #expect(result.regionOwner[2] == nil, "B's hub must not inherit A")
+        #expect(result.regionOwner[3] == nil, "B's drive must not inherit A")
+        #expect(result.regionOwner[1] == nil, "the unbounded hub claim is not recorded")
+        #expect(!result.absorbed.contains(1), "an unmarked hub is not collapsed into A's row")
+        #expect(result.isEmpty)
+    }
+
+    @Test("A first box's own SuperSpeed hub carrying its exact name marks nothing when the TB5 map did not place the box behind it")
+    func namedHubClaimantOnAFirstBoxIsRefusedWhenTheUSB3SideIsUnbounded() {
+        let devices = [
+            plain(1, 0x0320_0000, vendorID: 0x1A2A, productID: 0x0007, product: "Box A Dock", isHub: true, speed: 4),
+            plain(2, 0x0321_0000, vendorID: 0x1A2B, productID: 0x0B41, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(3, 0x0321_1000, vendorID: 0x1A2C, productID: 0x0006, product: "SSD", isHub: false, speed: 4),
+        ]
+        let result = resolve(twoBoxChain(), devices)
+        #expect(result.regionOwner[2] == nil && result.regionOwner[3] == nil, "B's USB3 side must not land in A")
+        #expect(result.regionOwner[1] == nil && !result.absorbed.contains(1))
+    }
+
+    @Test("A SuperSpeed tier (c) promotion onto a first box's hub falls back to the endpoint when the TB5 map did not place the box behind it")
+    func superSpeedTierCPromotionFallsBackWhenTheUSB3SideIsUnbounded() {
+        // Hub 1's VID is A's DROM vendor only; endpoint 2 on it has A's DROM
+        // pair at SuperSpeed. B's hub 3 and drive 4 hang under hub 1.
+        let devices = [
+            plain(1, 0x0320_0000, vendorID: 0x3A22, productID: 0x0001, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(2, 0x0321_0000, vendorID: 0x3A22, productID: 0x0043, isHub: false, speed: 4),
+            plain(3, 0x0322_0000, vendorID: 0x1A2B, productID: 0x0B41, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(4, 0x0322_1000, vendorID: 0x1A2C, productID: 0x0006, product: "SSD", isHub: false, speed: 4),
+        ]
+        let result = resolve(twoBoxChain(), devices)
+        #expect(result.regionOwner[3] == nil && result.regionOwner[4] == nil, "B's USB3 side must not land in A")
+        #expect(result.regionOwner[1] == nil, "the claim is not promoted onto A's hub")
+        #expect(result.regionOwner[2] == 200, "the claim stays on A's identity device")
+        #expect(result.absorbed == [2])
+    }
+
+    @Test("A last box's own hub carrying its numbers is not marked either: with no pairing and no TB5 map, no position evidence places it")
+    func hubClaimantOnTheLastBoxStands() {
+        // Nothing can hang behind B, but the hub could still be a box in
+        // front of it carrying B's numbers, so the last box gets no
+        // exemption: hubs are grouped by position evidence only.
+        let devices = [
+            plain(1, 0x0320_0000, vendorID: 0x3A11, productID: 0x0042, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(2, 0x0320_1000, vendorID: 0x1A2C, productID: 0x0006, product: "SSD", isHub: false, speed: 4),
+        ]
+        let result = resolve(twoBoxChain(), devices)
+        #expect(result.regionRoots[1] == nil, "the hub's numbers alone do not place it in B")
+        #expect(result.regionOwner[2] == nil, "the drive is not carried into B")
+        #expect(result.absorbed.isEmpty)
+    }
+
+    @Test("A top USB2 hub whose own numbers name another box is forced to port level, not refused by the pairing and then marked by those numbers")
+    func pairingConflictOnAHubForcesIt() {
+        // USB3 side: hubs 10 and 20 tunnelled at bridge depths 2 and 4, so
+        // position puts them in A and B, each carrying its box's Container
+        // ID. USB2 side: hub 1 at the forest root carries A's Container ID,
+        // so it is A's top USB2 hub by position and ID, but its own VID:PID
+        // is B's DROM pair. B is the last box, so without the forcing the
+        // refused hub would be marked B by its numbers, in the box its
+        // position contradicts.
+        let idA = "aaaa0000-0000-0000-0000-00000000000a"
+        let idB = "bbbb0000-0000-0000-0000-00000000000b"
+        let devices = [
+            tunnelledHub(10, 0x0320_0000, bridgeDepth: 2, vendorID: 0x1A2A, productID: 0x0010, containerID: idA),
+            tunnelledHub(20, 0x0321_0000, bridgeDepth: 4, vendorID: 0x1A2A, productID: 0x0020, containerID: idB),
+            plain(1, 0x0310_0000, vendorID: 0x3A11, productID: 0x0042, isHub: true, speed: 2, containerID: idA),
+            plain(2, 0x0311_0000, vendorID: 0x1A2C, productID: 0x0005, product: "Keyboard", isHub: false, speed: 2),
+            plain(3, 0x0312_0000, vendorID: 0x1A2B, productID: 0x0004, isHub: true, speed: 2, containerID: idB),
+        ]
+        let result = ChainDeviceAttribution.resolve(
+            chain: twoBoxChain(), forest: USBDeviceNode.buildTree(from: devices),
+            usbTunnelSwitchUIDs: [200, 300], expectedTunnelRootName: "apciec2"
+        )
+        #expect(result.regionOwner[1] == nil, "position and numbers disagree about the hub, so neither places it")
+        #expect(result.portLevelBoundaries.contains(1), "the contradiction is terminal")
+        #expect(!result.absorbed.contains(1))
+        #expect(result.regionOwner[2] == nil && result.regionOwner[3] == nil, "nothing below the forced hub is placed")
+        #expect(result.regionOwner[10] == 200 && result.regionOwner[20] == 300, "the USB3 side is unaffected")
+    }
+
+    // MARK: - Identity evidence places only the identity device
+
+    /// Box A (200) with two boxes behind it side by side: B (300) and C
+    /// (400). Both B and C are last boxes. Made-up numbers.
+    private func branchingChain() -> [IOThunderboltSwitchNode] {
+        let root = chainSwitch(id: 100, parent: nil, vendor: "Apple", model: "Mac", depth: 0)
+        let boxA = chainSwitch(id: 200, parent: 100, vendor: "Vendor A", model: "Box A Dock", depth: 1, dromVendorID: 0x3A22, dromModelID: 0x0043)
+        let boxB = chainSwitch(id: 300, parent: 200, vendor: "Vendor B", model: "Box B Display", depth: 2, dromVendorID: 0x3A11, dromModelID: 0x0042)
+        let boxC = chainSwitch(id: 400, parent: 200, vendor: "Vendor C", model: "Box C Drive", depth: 2, dromVendorID: 0x3A33, dromModelID: 0x0044)
+        return ThunderboltTopology.tree(from: root, in: [root, boxA, boxB, boxC])
+    }
+
+    @Test("R5-L1a: a last box's identity device on the first box's top USB2 hub places only itself, not the hub or the hub's other devices")
+    func lastBoxIdentityOnFirstBoxUSB2HubPlacesOnlyItself() {
+        // B's billboard (B's DROM pair) hangs on A's top USB2 hub, whose VID
+        // is B's DROM vendor only. No Container IDs, so the pairing places
+        // nothing. The corpus shape behind it: a chained enclosure's
+        // billboard directly on the dock's top USB2 hub.
+        let devices = [
+            plain(1, 0x0310_0000, vendorID: 0x3A11, productID: 0x0001, product: "USB2.0 Hub", isHub: true, speed: 2),
+            plain(2, 0x0311_0000, vendorID: 0x3A11, productID: 0x0042, isHub: false, speed: 1),
+            plain(3, 0x0312_0000, vendorID: 0x1A2C, productID: 0x0005, product: "Keyboard", isHub: false, speed: 1),
+            plain(4, 0x0313_0000, vendorID: 0x1A2B, productID: 0x0004, product: "USB2 Hub", isHub: true, speed: 2),
+            plain(5, 0x0313_1000, vendorID: 0x1A2C, productID: 0x0006, product: "Camera", isHub: false, speed: 2),
+        ]
+        let result = resolve(twoBoxChain(), devices)
+        #expect(result.regionOwner[1] == nil, "A's top USB2 hub is not placed in B")
+        #expect(result.regionOwner[3] == nil, "A's keyboard is not placed in B")
+        #expect(result.regionOwner[4] == nil && result.regionOwner[5] == nil, "nothing places B's USB2 hub or its camera")
+        #expect(result.regionOwner[2] == 300 && result.regionRoots[2] == 300, "B's identity device is B's, on its own")
+        #expect(result.absorbed == [2])
+    }
+
+    @Test("R5-L1b: on a branching chain, one last box's identity device does not carry a sibling box's USB2 hub into it")
+    func branchingChainIdentityDoesNotCarrySiblingBox() {
+        // A -> {B, C}. B's billboard sits on A's top USB2 hub, whose VID is
+        // B's DROM vendor only. C's USB2 hub and camera hang under that hub.
+        let devices = [
+            plain(1, 0x0310_0000, vendorID: 0x3A11, productID: 0x0001, product: "USB2.0 Hub", isHub: true, speed: 2),
+            plain(2, 0x0311_0000, vendorID: 0x3A11, productID: 0x0042, isHub: false, speed: 1),
+            plain(3, 0x0312_0000, vendorID: 0x1A2B, productID: 0x0004, product: "USB2 Hub", isHub: true, speed: 2),
+            plain(4, 0x0312_1000, vendorID: 0x1A2C, productID: 0x0006, product: "Camera", isHub: false, speed: 2),
+        ]
+        let result = resolve(branchingChain(), devices)
+        #expect(result.regionOwner[3] == nil && result.regionOwner[4] == nil, "C's USB2 side is not placed in B")
+        #expect(result.regionOwner[1] == nil, "A's hub is not placed in B")
+        #expect(result.regionOwner[2] == 300 && result.absorbed == [2], "B's identity device is B's, on its own")
+    }
+
+    @Test("R5-L1c: a last box's SuperSpeed identity device on the first box's top USB3 hub places only itself")
+    func lastBoxIdentityOnFirstBoxUSB3HubPlacesOnlyItself() {
+        // The USB3 twin of R5-L1a, with no TB5 route map: A's top SuperSpeed
+        // hub carries B's DROM vendor, B's DROM-pair device and A's drive
+        // sit on it.
+        let devices = [
+            plain(1, 0x0320_0000, vendorID: 0x3A11, productID: 0x0001, product: "USB3 Hub", isHub: true, speed: 4),
+            plain(2, 0x0321_0000, vendorID: 0x3A11, productID: 0x0042, isHub: false, speed: 4),
+            plain(3, 0x0322_0000, vendorID: 0x1A2C, productID: 0x0006, product: "SSD", isHub: false, speed: 4),
+        ]
+        let result = resolve(twoBoxChain(), devices)
+        #expect(result.regionOwner[3] == nil, "A's drive is not placed in B")
+        #expect(result.regionOwner[1] == nil, "A's hub is not placed in B")
+        #expect(result.regionOwner[2] == 300 && result.absorbed == [2], "B's identity device is B's, on its own")
+    }
+
+    @Test("R5-L2: on a chain position fences on both sides, an identity device on an inner hub of another box places only itself")
+    func identityOnAnInnerHubOfAnotherBoxPlacesOnlyItself() {
+        // USB3: hubs 10 and 20 placed in A and B by the depth join. USB2: the
+        // pairing places hub 1 in A and hub 3 in B by Container ID. Hub 4 is
+        // an inner hub under A's top USB2 hub, so it inherits A, and its VID
+        // is B's DROM vendor only. B's DROM-pair device and A's keyboard sit
+        // on hub 4.
+        let idA = "aaaa0000-0000-0000-0000-00000000000a"
+        let idB = "bbbb0000-0000-0000-0000-00000000000b"
+        let devices = [
+            tunnelledHub(10, 0x0320_0000, bridgeDepth: 2, vendorID: 0x1A2A, productID: 0x0010, containerID: idA),
+            tunnelledHub(20, 0x0321_0000, bridgeDepth: 4, vendorID: 0x1A2A, productID: 0x0020, containerID: idB),
+            plain(1, 0x0310_0000, vendorID: 0x1A2D, productID: 0x0001, product: "USB2.0 Hub", isHub: true, speed: 2, containerID: idA),
+            plain(3, 0x0312_0000, vendorID: 0x1A2D, productID: 0x0003, product: "USB2.0 Hub", isHub: true, speed: 2, containerID: idB),
+            plain(4, 0x0314_0000, vendorID: 0x3A11, productID: 0x0009, product: "USB2.0 Hub", isHub: true, speed: 2),
+            plain(5, 0x0314_1000, vendorID: 0x3A11, productID: 0x0042, isHub: false, speed: 1),
+            plain(6, 0x0314_2000, vendorID: 0x1A2C, productID: 0x0005, product: "Keyboard", isHub: false, speed: 1),
+        ]
+        let result = ChainDeviceAttribution.resolve(
+            chain: twoBoxChain(), forest: USBDeviceNode.buildTree(from: devices),
+            usbTunnelSwitchUIDs: [200, 300], expectedTunnelRootName: "apciec2"
+        )
+        #expect(result.regionOwner[1] == 200 && result.regionOwner[3] == 300, "fixture: the pairing ran")
+        #expect(result.regionOwner[4] == 200, "A's inner hub stays in A, where position puts it")
+        #expect(result.regionOwner[6] == 200, "A's keyboard stays in A")
+        #expect(result.regionOwner[5] == 300 && result.regionRoots[5] == 300, "B's identity device is B's, on its own")
+        #expect(result.absorbed == [5])
     }
 }

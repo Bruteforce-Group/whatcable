@@ -108,6 +108,11 @@ public struct USBDevice: Identifiable, Hashable {
     /// publishes one: the Alt Modes it advertises and their per-mode state.
     /// `nil` when the device has no Billboard capability or the BOS read failed.
     public let billboard: BillboardCapability?
+    /// `kUSBContainerID` exactly as macOS publishes it. A hub chip's USB2 and
+    /// USB3 halves carry the same value, but one product can hold several
+    /// chips with different IDs, and some chip makers reuse one ID across
+    /// products. `nil` when the device publishes none.
+    public let containerID: String?
     public let rawProperties: [String: String]
 
     public init(
@@ -134,6 +139,7 @@ public struct USBDevice: Identifiable, Hashable {
         deviceClass: UInt8? = nil,
         ioClassName: String? = nil,
         billboard: BillboardCapability? = nil,
+        containerID: String? = nil,
         rawProperties: [String: String]
     ) {
         self.id = id
@@ -159,6 +165,7 @@ public struct USBDevice: Identifiable, Hashable {
         self.deviceClass = deviceClass
         self.ioClassName = ioClassName
         self.billboard = billboard
+        self.containerID = containerID
         self.rawProperties = rawProperties
     }
 
