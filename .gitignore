@@ -60,6 +60,10 @@ DECISIONS.md
 # checkout alongside it.
 research
 
+# The local data folder (format 1 runs from KV, never in git), linked the same
+# way as `research-data`.
+research-data
+
 # Python bytecode (from research/build scripts like inspect-probe.py)
 __pycache__/
 *.pyc

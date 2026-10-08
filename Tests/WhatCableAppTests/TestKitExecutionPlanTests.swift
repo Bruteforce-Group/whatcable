@@ -7,15 +7,14 @@ import Testing
 // hands to the execution loop.
 @Suite("Test Kit execution plan")
 struct TestKitExecutionPlanTests {
-    @Test("The repeat list is exactly typec_phy_properties, smart_battery_full_keys, usb4_router_interfaces, in that order")
+    @Test("The repeat list is exactly the registry snapshot")
     func repeatProbeListContent() {
-        // Pinned to the task's naming: 31, 32, 29 in that order. Comparing
-        // repeatProbes against itself elsewhere in this file would be
-        // tautological, so this test asserts the literal content instead.
+        // Pinned to the probe rebuild: the snapshot is sampled at the start
+        // and the end of every run, replacing the old 31, 32, 29 repeats.
+        // Comparing repeatProbes against itself elsewhere in this file would
+        // be tautological, so this test asserts the literal content instead.
         #expect(TestKitRunner.repeatProbes == [
-            "31_typec_phy_properties",
-            "32_smart_battery_full_keys",
-            "29_usb4_router_interfaces",
+            "50_registry_snapshot",
         ])
     }
 
@@ -30,7 +29,7 @@ struct TestKitExecutionPlanTests {
         #expect(firstPass.map(\.submissionName) == TestKitRunner.probeNames)
 
         // The repeat probes run again at the very end, in the declared
-        // order (31, 32, 29), submitted under a distinct "_end" name so they
+        // order, submitted under a distinct "_end" name so they
         // don't overwrite the first-position KV key.
         let secondPass = Array(plan.suffix(TestKitRunner.repeatProbes.count))
         #expect(secondPass.map(\.binaryName) == TestKitRunner.repeatProbes)

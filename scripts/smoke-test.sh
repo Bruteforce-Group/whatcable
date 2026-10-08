@@ -236,9 +236,15 @@ if [[ -d "${PROBES_SRC_DIR}" ]]; then
     for src in "${PROBES_SRC_DIR}"/*.c; do
         name=$(basename "${src}" .c)
         echo "    ${name}"
+        # Format 1 probes write this into their header line so every
+        # submission says which source built it: the SHA-256 of the .c file
+        # followed by probe_json.h (probes/test-kit/FORMAT.md). Older probes
+        # ignore the define.
+        source_sha=$(cat "${src}" "${PROBES_SRC_DIR}/probe_json.h" | shasum -a 256 | cut -c1-64)
         clang -arch arm64 -arch x86_64 \
             -framework IOKit -framework CoreFoundation \
             -mmacosx-version-min="${MIN_OS}" \
+            -DPROBE_SOURCE_SHA256="\"${source_sha}\"" \
             -O2 -o "${PROBES_DEST_DIR}/${name}" "${src}"
     done
     echo "    $(ls "${PROBES_DEST_DIR}" | wc -l | tr -d ' ') probes compiled"

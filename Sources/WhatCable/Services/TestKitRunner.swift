@@ -11,10 +11,15 @@ final class TestKitRunner: ObservableObject {
     private nonisolated static let log = Logger(subsystem: "uk.whatcable.whatcable", category: "test-kit")
     private static let apiURL = "https://whatcable-test-kit.darrylmorley-uk.workers.dev"
     // Bound both the retained child output and the encoded network copy. The
-    // higher request limit leaves room for JSON escaping while still imposing
-    // a hard ceiling if an otherwise-valid output expands during serialization.
-    nonisolated static let maxProbeOutputBytes = 6 * 1024 * 1024
-    nonisolated static let maxRequestBodyBytes = 10 * 1024 * 1024
+    // output cap is 50_registry_snapshot's own BYTE_CAP (30 MiB) plus 1 MiB
+    // for the record in hand and the footer it still writes past that; more
+    // than this is rejected whole, never truncated. Output goes up gzipped
+    // and base64-encoded, which shrinks it (a 14 MB snapshot encodes to under
+    // 1 MB), so the request cap can sit below the output cap: 24 MiB, under
+    // the 25 MiB the worker refuses (one Workers KV value).
+    // TestKitRunnerOutputLimitTests pins both against those sources.
+    nonisolated static let maxProbeOutputBytes = 31 * 1024 * 1024
+    nonisolated static let maxRequestBodyBytes = 24 * 1024 * 1024
     private nonisolated static let probeReadChunkBytes = 64 * 1024
 
     enum State: Equatable {
@@ -31,40 +36,23 @@ final class TestKitRunner: ObservableObject {
     @Published private(set) var state: State = .idle
 
     static let probeNames: [String] = [
-        "01_walk_pd_tree",
-        "03_hpm_deep_dive",
-        "04_raw_registry_dump",
-        "17_deep_property_dump",
-        "19_pdo_decode_and_usb3_watch",
-        "21_tb_cfplugin_retimer",
-        "25_usb_bos_descriptor",
-        "26_displayport_altmode",
-        "27_iopower_management",
-        "29_usb4_router_interfaces",
-        "31_typec_phy_properties",
-        "32_smart_battery_full_keys",
-        "33_displayport_capability",
-        "34_smc_power_keys",
-        "35_hpm_port_uuid",
-        "36_xhci_port_map",
-        "37_tb_tunnel_port_map",
-        "38_usb_device_tree",
-        "39_system_power_adapter",
-        "40_hub_port_statistics",
-        "41_class_discovery",
-        "42_typec_phy_subtree",
-        "43_usb_port_subtree",
+        "50_registry_snapshot",
+        "51_driver_access",
+        "52_usb_bos",
+        "53_smc_keys",
+        "54_power_sources",
+        "55_hub_ports",
     ]
 
-    /// Probes cheap to re-run and interesting to sample twice per kit run
-    /// (typec_phy_properties, the battery snapshot, and the TB router/tunnel
-    /// state can all drift over the minute or so a full run takes). These run
-    /// a second time at the very end of the run, after every other probe has
-    /// finished. Order here is the order the end-of-run captures execute in.
+    /// Probes sampled twice per kit run: once in their place in `probeNames`
+    /// and again at the very end, after every other probe has finished. The
+    /// registry snapshot is the only one. It records the whole registry, so
+    /// comparing its two captures shows any state that drifted during the
+    /// run (port, power, battery, Thunderbolt). It replaces the old repeats
+    /// (31, 32, 29), which each sampled one slice of that. Order here is the
+    /// order the end-of-run captures execute in.
     static let repeatProbes: [String] = [
-        "31_typec_phy_properties",
-        "32_smart_battery_full_keys",
-        "29_usb4_router_interfaces",
+        "50_registry_snapshot",
     ]
 
     /// One entry in the execution plan: which probe binary to run, and what
@@ -128,6 +116,10 @@ final class TestKitRunner: ObservableObject {
         let chip = Self.chipName()
         let model = DarwinSystemInfo.fetchMacModel()
         let timestamp = ISO8601DateFormatter().string(from: Date())
+        // One ID for the whole run, sent with every /submit and with
+        // /complete, so the worker can tell which captures belong together
+        // (the two registry snapshot captures especially).
+        let runID = UUID().uuidString.lowercased()
 
         guard let probesDir = Self.probesDirectory() else {
             state = .error("Probe binaries not found in app bundle")
@@ -209,15 +201,32 @@ final class TestKitRunner: ObservableObject {
                 Self.log.info("Probe \(probeName) hit the 30s watchdog but produced output; submitting partial data")
             }
 
-            let ok = await submitProbeResult(
-                machineID: machineID,
-                probeName: probeName,
-                output: output,
-                macosVersion: macosVersion,
-                chip: chip,
-                model: model,
-                timestamp: timestamp
-            )
+            // Built on the main actor: gzip and base64 of 14 MB of JSON Lines
+            // took 70 ms in a release build (measured 2026-10-07), short
+            // enough not to stall the settings UI, and only the two snapshot
+            // captures are that big.
+            let payload: [String: Any]
+            do {
+                payload = try Self.submitPayload(
+                    runID: runID,
+                    machineID: machineID,
+                    probeName: probeName,
+                    output: output,
+                    macosVersion: macosVersion,
+                    chip: chip,
+                    model: model,
+                    timestamp: timestamp
+                )
+            } catch {
+                // Nothing can be sent without the encoding, so the probe
+                // counts as producing no output rather than as a failed
+                // submission.
+                Self.log.error("Probe \(probeName) output could not be encoded: \(error.localizedDescription)")
+                noOutputProbes.append(probeName)
+                continue
+            }
+
+            let ok = await postJSON(to: "\(Self.apiURL)/submit", payload: payload)
 
             if ok {
                 passed += 1
@@ -236,6 +245,7 @@ final class TestKitRunner: ObservableObject {
         }
 
         await submitComplete(
+            runID: runID,
             machineID: machineID,
             macosVersion: macosVersion,
             chip: chip,
@@ -261,9 +271,11 @@ final class TestKitRunner: ObservableObject {
     /// `terminationReason`/`terminationStatus` pair, so that pair alone can't
     /// distinguish "our watchdog" from "somebody else's kill" (raw signal 15
     /// is still worth knowing as a sanity check when reading logs, but it is
-    /// not what this code branches on).
+    /// not what this code branches on). `output` is the probe's bytes exactly
+    /// as written, never decoded as text: they go up gzipped, so a byte that
+    /// is not valid UTF-8 reaches the corpus intact.
     struct ProbeRunResult {
-        let output: String?
+        let output: Data?
         let exitStatus: Int32
         let terminationReason: Process.TerminationReason
         let didTimeout: Bool
@@ -334,6 +346,11 @@ final class TestKitRunner: ObservableObject {
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
                 process.executableURL = binaryURL
+                // Setting `environment` replaces the inherited one, so start
+                // from the parent's. Format 1 probes write the version into
+                // their header line (probes/test-kit/probe_json.h).
+                process.environment = ProcessInfo.processInfo.environment
+                    .merging(["WHATCABLE_APP_VERSION": AppInfo.version]) { $1 }
                 let pipe = Pipe()
                 process.standardOutput = pipe
                 process.standardError = pipe
@@ -404,25 +421,8 @@ final class TestKitRunner: ObservableObject {
                     Self.terminateWithEscalation(process)
                 }
                 process.waitUntilExit()
-                // Policy decision (PR #451 review): decode lossily. Probe
-                // dumps print device strings read raw from hardware, and a
-                // single bad byte used to make strict decoding return nil,
-                // throwing away the entire dump. A mostly-good dump with
-                // U+FFFD replacement characters is worth more to the corpus
-                // than no dump. The round-trip check makes the substitution
-                // visible in logs instead of silent.
-                let output: String?
-                if didExceedOutputLimit || didFailReading {
-                    output = nil
-                } else {
-                    let decoded = String(decoding: data, as: UTF8.self)
-                    if Data(decoded.utf8) != data {
-                        Self.log.warning("Probe \(binaryURL.lastPathComponent) output contained invalid UTF-8; bad bytes were replaced with U+FFFD")
-                    }
-                    output = decoded
-                }
                 continuation.resume(returning: ProbeRunResult(
-                    output: output,
+                    output: didExceedOutputLimit || didFailReading ? nil : data,
                     exitStatus: process.terminationStatus,
                     terminationReason: process.terminationReason,
                     didTimeout: timeoutMarker.didFire,
@@ -432,29 +432,37 @@ final class TestKitRunner: ObservableObject {
         }
     }
 
-    private func submitProbeResult(
+    /// The /submit body for one probe capture. `output` is the probe's raw
+    /// bytes, sent gzipped and base64-encoded with `output_encoding` naming
+    /// that, so nothing is lost to text decoding and a snapshot fits the
+    /// request cap. `output_encoding` and `run_id` are new; every other field
+    /// is as before. Throws only if the encoding fails. Pure (no I/O), so
+    /// tests call it directly.
+    nonisolated static func submitPayload(
+        runID: String,
         machineID: String,
         probeName: String,
-        output: String,
+        output: Data,
         macosVersion: String,
         chip: String,
         model: String,
         timestamp: String
-    ) async -> Bool {
-        let payload: [String: Any] = [
+    ) throws -> [String: Any] {
+        [
+            "run_id": runID,
             "machine_id": machineID,
             "probe_name": probeName,
-            "output": output,
+            "output": try TestKitUploadEncoding.gzipBase64(output),
+            "output_encoding": TestKitUploadEncoding.name,
             "macos_version": macosVersion,
             "chip": chip,
             "model": model,
             "timestamp": timestamp,
         ]
-
-        return await postJSON(to: "\(Self.apiURL)/submit", payload: payload)
     }
 
     private func submitComplete(
+        runID: String,
         machineID: String,
         macosVersion: String,
         chip: String,
@@ -465,6 +473,7 @@ final class TestKitRunner: ObservableObject {
         noOutputProbes: [String]
     ) async {
         var payload: [String: Any] = [
+            "run_id": runID,
             "machine_id": machineID,
             "macos_version": macosVersion,
             "chip": chip,
