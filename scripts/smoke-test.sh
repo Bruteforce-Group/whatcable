@@ -30,6 +30,22 @@ MIN_OS="14.0"
 CLI_PRODUCT="whatcable-cli"
 CLI_BIN_NAME="whatcable"
 
+# The SDK this build links against. Xcode 27's `swift build` writes the
+# deployment target (MIN_OS) into LC_BUILD_VERSION's sdk field instead of the
+# real SDK. macOS reads that field to decide which behaviour to give the app,
+# so a binary that claims "built with the 14.0 SDK" runs SwiftUI in old-SDK
+# compatibility mode, which opened a blank Settings window at launch. Passing
+# -platform_version to the linker ourselves records the real SDK, and the
+# "Verifying SDK version" step below fails the build if any shipped binary
+# still records the wrong one.
+SDK_VERSION="$(xcrun --show-sdk-version)"
+SWIFT_LINKER_PLATFORM_FLAGS=(
+    -Xlinker -platform_version
+    -Xlinker macos
+    -Xlinker "${MIN_OS}"
+    -Xlinker "${SDK_VERSION}"
+)
+
 DEVELOPER_ID="${DEVELOPER_ID:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 
@@ -70,12 +86,12 @@ mkdir -p "${MACOS_DIR}" "${HELPERS_DIR}" "${RESOURCES_DIR}" "${PLUGINS_DIR}"
 
 echo "==> Building universal release binaries (arm64 + x86_64)"
 swift build -c release --product "${APP_NAME}" \
-    --arch arm64 --arch x86_64
+    --arch arm64 --arch x86_64 "${SWIFT_LINKER_PLATFORM_FLAGS[@]}"
 swift build -c release --product "${CLI_PRODUCT}" \
-    --arch arm64 --arch x86_64
+    --arch arm64 --arch x86_64 "${SWIFT_LINKER_PLATFORM_FLAGS[@]}"
 
 BIN_PATH=$(swift build -c release --product "${APP_NAME}" \
-    --arch arm64 --arch x86_64 --show-bin-path)
+    --arch arm64 --arch x86_64 "${SWIFT_LINKER_PLATFORM_FLAGS[@]}" --show-bin-path)
 cp "${BIN_PATH}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
 # CLI lives in Helpers/, not MacOS/, because macOS filesystems are case-insensitive
 # by default. Putting "whatcable" next to "WhatCable" silently overwrote the
@@ -420,6 +436,172 @@ CLI_ZIP="${DIST_DIR}/whatcable-cli-${VERSION}.zip"
 rm -f "${CLI_ZIP}"
 ( cd "${DIST_DIR}" && ditto --norsrc -c -k --keepParent "whatcable-cli" "whatcable-cli-${VERSION}.zip" )
 echo "    Created ${CLI_ZIP}"
+
+# Every shipped Mach-O must record the real SDK and the deployment target in
+# LC_BUILD_VERSION, on every architecture slice. A wrong sdk field puts the app
+# in old-SDK compatibility mode (see SDK_VERSION at the top). Versions are
+# compared after stripping trailing ".0" groups, so "27.0" and "27.0.0" match
+# while "27.1" and "27.0" do not.
+#
+# Three layers, so a gap in one cannot pass quietly:
+#   1. Every file in the bundle and the CLI zip is walked. Mach-O is decided by
+#      the file's magic bytes, so a Mach-O that lipo or vtool cannot read is a
+#      failure, not "just a resource". Static archives (.a) are not Mach-O
+#      magic and are skipped; nothing in the bundle should be one anyway.
+#   2. A symlink that resolves to a Mach-O fails outright. Nothing in the
+#      bundle is meant to be a symlink, and following one would check a file
+#      outside the bundle or the same file twice.
+#   3. The binaries we know we ship (app, CLI, widget, one per probe source,
+#      the CLI in the zip) must each exist as a regular file AND appear in the
+#      list of files the walk actually checked.
+normalise_version() {
+    local v="$1"
+    while [[ "${v}" == *.0 ]]; do
+        v="${v%.0}"
+    done
+    printf '%s\n' "${v}"
+}
+
+# is_macho <file>: true when the first four bytes are a Mach-O or fat magic,
+# in either byte order (thin 32/64-bit, fat, fat64).
+is_macho() {
+    local magic
+    magic="$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')"
+    case "${magic}" in
+        feedface|cefaedfe|feedfacf|cffaedfe|cafebabe|bebafeca|cafebabf|bfbafeca) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+SDK_CHECK_FILES=0
+SDK_CHECK_SLICES=0
+SDK_CHECK_FAILURES=0
+# Newline-separated paths that contributed at least one checked slice.
+SDK_CHECKED_PATHS=""
+
+sdk_check_fail() {
+    echo "    ERROR: $*" >&2
+    SDK_CHECK_FAILURES=$((SDK_CHECK_FAILURES + 1))
+}
+
+# check_build_version <file> <label>: checks one Mach-O file's every slice.
+check_build_version() {
+    local file="$1" label="$2" archs arch info cmd minos sdk
+    if ! archs="$(lipo -archs "${file}" 2>&1)" || [[ -z "${archs}" ]]; then
+        sdk_check_fail "${label}: Mach-O magic but lipo cannot read it: ${archs}"
+        return 0
+    fi
+    SDK_CHECK_FILES=$((SDK_CHECK_FILES + 1))
+    SDK_CHECKED_PATHS="${SDK_CHECKED_PATHS}${file}"$'\n'
+    for arch in ${archs}; do
+        SDK_CHECK_SLICES=$((SDK_CHECK_SLICES + 1))
+        if ! info="$(vtool -arch "${arch}" -show-build "${file}" 2>&1)"; then
+            sdk_check_fail "${label} (${arch}): vtool -show-build failed: ${info}"
+            continue
+        fi
+        # Read minos and sdk from the LC_BUILD_VERSION block only. A slice
+        # built for an old target carries LC_VERSION_MIN_MACOSX instead, which
+        # has no minos line, so it reads as "no LC_BUILD_VERSION" below.
+        # awk reads a here-string, not a pipe, and never exits early: an early
+        # exit under `set -o pipefail` killed the script with SIGPIPE at random.
+        cmd="$(awk '!done && $1 == "cmd" && $2 == "LC_BUILD_VERSION" { print $2; done = 1 }' <<< "${info}")"
+        if [[ -z "${cmd}" ]]; then
+            sdk_check_fail "${label} (${arch}): no LC_BUILD_VERSION load command (old LC_VERSION_MIN_MACOSX or none). Expected sdk ${SDK_VERSION}, minos ${MIN_OS}."
+            continue
+        fi
+        minos="$(awk '$1 == "cmd" { inb = ($2 == "LC_BUILD_VERSION") } !done && inb && $1 == "minos" { print $2; done = 1 }' <<< "${info}")"
+        sdk="$(awk '$1 == "cmd" { inb = ($2 == "LC_BUILD_VERSION") } !done && inb && $1 == "sdk" { print $2; done = 1 }' <<< "${info}")"
+        if [[ "$(normalise_version "${sdk}")" != "$(normalise_version "${SDK_VERSION}")" \
+            || "$(normalise_version "${minos}")" != "$(normalise_version "${MIN_OS}")" ]]; then
+            sdk_check_fail "${label} (${arch}): sdk ${sdk:-<missing>}, minos ${minos:-<missing>}; expected sdk ${SDK_VERSION}, minos ${MIN_OS}."
+        fi
+    done
+}
+
+# walk_for_macho <root> <label prefix>: checks every Mach-O under root and
+# fails on any symlink that resolves to one. Returns 1 if the walk itself
+# failed. find runs as its own checked step into a file, not behind process
+# substitution: there its exit status is lost, so an unreadable directory
+# would end the loop early and pass with the subtree below it unchecked.
+walk_for_macho() {
+    local root="$1" prefix="$2" f label list find_err
+    list="$(mktemp)"
+    find_err="$(mktemp)"
+    if ! find "${root}" \( -type f -o -type l \) -print0 > "${list}" 2> "${find_err}"; then
+        echo "ERROR: SDK version check could not walk all of ${root}; refusing a partial check." >&2
+        sed 's/^/       /' "${find_err}" >&2
+        rm -f "${list}" "${find_err}"
+        return 1
+    fi
+    rm -f "${find_err}"
+    while IFS= read -r -d '' f; do
+        label="${prefix}${f#"${root}"/}"
+        if [[ -L "${f}" ]]; then
+            if [[ -f "${f}" ]] && is_macho "${f}"; then
+                sdk_check_fail "${label}: symlink to a Mach-O ($(readlink "${f}")). Ship the binary itself, not a link."
+            fi
+            continue
+        fi
+        is_macho "${f}" || continue
+        check_build_version "${f}" "${label}"
+    done < "${list}"
+    rm -f "${list}"
+}
+
+# require_checked <file> <label>: a binary we know we ship must be a regular
+# file that the walk above actually checked.
+require_checked() {
+    local file="$1" label="$2"
+    if [[ -L "${file}" ]]; then
+        sdk_check_fail "required binary ${label} is a symlink, not a file."
+    elif [[ ! -f "${file}" ]]; then
+        sdk_check_fail "required binary ${label} is missing."
+    elif ! grep -Fxq -- "${file}" <<< "${SDK_CHECKED_PATHS}"; then
+        sdk_check_fail "required binary ${label} was not checked (not Mach-O, or unreadable)."
+    fi
+}
+
+echo "==> Verifying SDK version recorded in every Mach-O (sdk ${SDK_VERSION}, minos ${MIN_OS})"
+walk_for_macho "${APP_DIR}" "${APP_DIR}/" || exit 1
+
+SDK_CHECK_ZIP_DIR="$(mktemp -d)"
+if ! ditto -x -k "${CLI_ZIP}" "${SDK_CHECK_ZIP_DIR}"; then
+    echo "ERROR: SDK version check could not extract ${CLI_ZIP}." >&2
+    rm -rf "${SDK_CHECK_ZIP_DIR}"
+    exit 1
+fi
+if ! walk_for_macho "${SDK_CHECK_ZIP_DIR}" "${CLI_ZIP}:"; then
+    rm -rf "${SDK_CHECK_ZIP_DIR}"
+    exit 1
+fi
+
+require_checked "${MACOS_DIR}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+require_checked "${HELPERS_DIR}/${CLI_BIN_NAME}" "${HELPERS_DIR}/${CLI_BIN_NAME}"
+require_checked "${PLUGINS_DIR}/${WIDGET_APPEX}/Contents/MacOS/WhatCableWidget" \
+    "${PLUGINS_DIR}/${WIDGET_APPEX}/Contents/MacOS/WhatCableWidget"
+# One probe binary per probe source, the same list the probe build loops over.
+if [[ -d "${PROBES_SRC_DIR}" ]]; then
+    for src in "${PROBES_SRC_DIR}"/*.c; do
+        [[ -e "${src}" ]] || continue
+        probe_bin="${PROBES_DEST_DIR}/$(basename "${src}" .c)"
+        require_checked "${probe_bin}" "${probe_bin}"
+    done
+fi
+require_checked "${SDK_CHECK_ZIP_DIR}/whatcable-cli/${CLI_BIN_NAME}" "${CLI_ZIP}:whatcable-cli/${CLI_BIN_NAME}"
+rm -rf "${SDK_CHECK_ZIP_DIR}"
+
+# A check over nothing has tested nothing: zero Mach-O files means the walk
+# above is broken, not that the build is clean.
+if [[ "${SDK_CHECK_FILES}" -eq 0 ]]; then
+    echo "ERROR: SDK version check found no Mach-O files in ${APP_DIR} or ${CLI_ZIP}." >&2
+    exit 1
+fi
+if [[ "${SDK_CHECK_FAILURES}" -ne 0 ]]; then
+    echo "ERROR: SDK version check failed ${SDK_CHECK_FAILURES} time(s) across ${SDK_CHECK_FILES} Mach-O files, ${SDK_CHECK_SLICES} slices." >&2
+    echo "       A wrong sdk field runs the app in SwiftUI compatibility mode." >&2
+    exit 1
+fi
+echo "    ${SDK_CHECK_FILES} Mach-O files, ${SDK_CHECK_SLICES} slices: all record sdk ${SDK_VERSION}, minos ${MIN_OS}"
 
 echo "==> Verifying signature"
 codesign --verify --deep --strict --verbose=2 "${APP_DIR}" 2>&1 | sed 's/^/    /'
