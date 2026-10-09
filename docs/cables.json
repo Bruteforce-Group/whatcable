@@ -392,6 +392,20 @@
     "xid" : "none"
   },
   {
+    "brand" : "LTT TrueSpec USB-C cable 1 m, 240 W \/ 40 Gbps (VID\/PID zeroed)",
+    "cableVDO" : "0x110A2E43",
+    "issueNum" : "#631",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/631",
+    "pid" : "0x0000",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : false,
+    "speed" : "USB4 Gen 3 (40 Gbps, Thunderbolt 4 class)",
+    "type" : "passive",
+    "vendor" : "(zeroed)",
+    "vid" : "0x0000",
+    "xid" : "none"
+  },
+  {
     "brand" : "LTT TrueSpec USB-C cable, marked 20 Gbps (e-marker has no 20 Gbps code, reads Gen 2)",
     "cableVDO" : "0x110A6E42",
     "issueNum" : "#470",
@@ -572,6 +586,20 @@
     "vendor" : "HP Inc.",
     "vid" : "0x03F0",
     "xid" : "none"
+  },
+  {
+    "brand" : "HP USB 3.1 Gen 1 5 A cable (P\/N 914119-005, Luxshare), bundled with Dell USB-C displays",
+    "cableVDO" : "0x00082051",
+    "issueNum" : "#625",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/625",
+    "pid" : "0x1247",
+    "power" : "5 A \/ 20 V (100 W)",
+    "registered" : true,
+    "speed" : "USB 3.2 Gen 1 (5 Gbps)",
+    "type" : "passive",
+    "vendor" : "HP Inc.",
+    "vid" : "0x03F0",
+    "xid" : "0x12"
   },
   {
     "brand" : "ADT-Link UT3G USB4 eGPU bundled cable",
@@ -910,6 +938,20 @@
     "xid" : "0x265E"
   },
   {
+    "brand" : "Hotutuki PD 240 W 80 Gbps cable, Amazon (eEver silicon)",
+    "cableVDO" : "0x110A2E44",
+    "issueNum" : "#541",
+    "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/541",
+    "pid" : "0x0903",
+    "power" : "5 A \/ 50 V (240 W)",
+    "registered" : true,
+    "speed" : "USB4 Gen 4 (80 Gbps, Thunderbolt 5 class)",
+    "type" : "passive",
+    "vendor" : "eEver Technology, Inc.",
+    "vid" : "0x1E4E",
+    "xid" : "0x2EA"
+  },
+  {
     "brand" : "Anker 333 USB-C 3.3 ft nylon",
     "cableVDO" : "0x00082040",
     "issueNum" : "#60",
@@ -1050,7 +1092,7 @@
     "xid" : "none"
   },
   {
-    "brand" : "OWC Thunderbolt 3 cable, bundled with Mercury Elite Pro Dock; also shipped with the CalDigit TS3 Plus",
+    "brand" : "OWC Thunderbolt 3 cable, bundled with Mercury Elite Pro Dock; also shipped with the CalDigit TS3 Plus; also sold as StarTech",
     "cableVDO" : "0x31082052",
     "issueNum" : "#143",
     "issueURL" : "https:\/\/github.com\/darrylmorley\/whatcable\/issues\/143",
