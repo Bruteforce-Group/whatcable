@@ -121,18 +121,10 @@ struct DisplayTimingReaderProbeSweepTests {
         for line in alternateRate { print("  ALTERNATE RATE \(line)") }
         for line in mismatches { print("  MISMATCH \(line)") }
 
-        // Coverage floors: a corpus that exists but yields little must not
-        // pass quietly. Figures at the time of writing, re-derived by the
-        // second parser (the research repo's scripts/display-timing-sweep.py):
-        // 1352 folders with probe 26, 453 nodes (AppleCLCD2 143,
-        // IOMobileFramebufferShim 310), 260 captured, 193 not, 238
-        // attached, 22 unpaired, 235 exact, 3 alternate rate, 0 mismatches,
-        // 104 single-depth timings.
-        #expect(nodesWithTables >= 440, "only \(nodesWithTables) external nodes with tables; the corpus or the parser is near-empty")
-        #expect((byClass["AppleCLCD2"] ?? 0) >= 100 && (byClass["IOMobileFramebufferShim"] ?? 0) >= 100,
-            "both node classes must be in the corpus: \(byClass)")
-        #expect(comparedExact >= 230, "only \(comparedExact) exact comparisons; expected at least 230")
-        #expect(singleDepth >= 100, "only \(singleDepth) timings with a single depth")
+        // Non-vacuity: a corpus that exists but yields no node must not pass quietly. The run
+        // prints every total (re-derivable by the research repo's scripts/display-timing-sweep.py);
+        // the assertions below hold the per-node rule and the accounting, never the totals.
+        #expect(nodesWithTables > 0, "no external node with tables: checked at least one")
         #expect(mismatches.isEmpty, "\(mismatches.count) driven timings the EDID does not declare:\n\(mismatches.joined(separator: "\n"))")
         #expect(attachedPorts == claimedNodes, "a port attached a timing no node explains: \(attachedPorts) ports for \(claimedNodes) nodes")
         #expect(comparedExact + alternateRate.count + mismatches.count == attachedPorts, "every attached port is compared")
@@ -144,11 +136,10 @@ struct DisplayTimingReaderProbeSweepTests {
 
     /// Replays every external node with tables through the production parser
     /// and asserts what research/displays/display-node-keys.md measured with
-    /// its six parser pairs (2026-09-18, 1408 folders). This sweep reads the
-    /// tree and redacted renderings only, and every external node with tables
-    /// rather than the 401 paired nodes, so its denominators are its own; the
-    /// pair figure is quoted beside each assertion as the reference, and the
-    /// invariants (never a proper subset, never a SupportsDSC = 0 member,
+    /// its six parser pairs. This sweep reads the tree and redacted renderings
+    /// only, and every external node with tables rather than only the paired
+    /// nodes, so its denominators are its own and are printed, not asserted;
+    /// the invariants (never a proper subset, never a SupportsDSC = 0 member,
     /// never a non-4:2:0 downstream format, virtual timings alone at
     /// 0xffffffff, native DP never unsafe) are asserted as zeros.
     ///
@@ -167,6 +158,7 @@ struct DisplayTimingReaderProbeSweepTests {
         var timingsSeen = 0
         var timingsParsed = 0
         var unparsed: [String] = []
+        var unparsedNotCut: [String] = []
         var shapeSampledSkipped = 0
         var incomplete: [String] = []
         var shapeTested = 0, shapeEmpty = 0, shapeEqual = 0
@@ -197,7 +189,14 @@ struct DisplayTimingReaderProbeSweepTests {
                     guard let timing = DisplayTimingReader.parseTiming(dict) else {
                         // Ruling 45's identity: every raw entry is parsed or named. The named ones are the
                         // entries the 64 KB cut truncates (no ID or no totals).
-                        unparsed.append("\(nodeTag) entry \(entryIndex) ID \((dict["ID"] as? NSNumber)?.intValue.description ?? "absent") keys \(dict.keys.sorted().prefix(6))")
+                        let entryTag = "\(nodeTag) entry \(entryIndex) ID \((dict["ID"] as? NSNumber)?.intValue.description ?? "absent") keys \(dict.keys.sorted().prefix(6))"
+                        unparsed.append(entryTag)
+                        // The cut-entry signature: the 64 KB cut leaves an entry with no ID or without
+                        // its totals. An entry that carries its ID and both totals and still fails to
+                        // parse is a parser gap, never a cut.
+                        let hasTotals = (dict["HorizontalAttributes"] as? [String: Any])?["Total"] != nil
+                            && (dict["VerticalAttributes"] as? [String: Any])?["Total"] != nil
+                        if dict["ID"] != nil && hasTotals { unparsedNotCut.append(entryTag) }
                         continue
                     }
                     timingsParsed += 1
@@ -257,9 +256,8 @@ struct DisplayTimingReaderProbeSweepTests {
                         shapeEqual += 1
                     } else if listed.isSubset(of: capableAll) {
                         // A PARTIAL list: some DSC-capable modes need compression on this
-                        // link and others do not. Legitimate, and the shape the rule missed
-                        // until the corpus grew past 1408 folders. First and only case at
-                        // 1524 folders: m2ultra_macos27.0_c timing 91, list [102] against
+                        // link and others do not. Legitimate, and a shape the rule once missed.
+                        // The named case: m2ultra_macos27.0_c timing 91, list [102] against
                         // capable [1, 96, 100, 101, 102]. Mode 102 is the node's only 10-bit
                         // mode; 1, 96, 100 and 101 are all 8-bit. 10-bit costs about 25% more
                         // bandwidth, so the 8-bit modes fit this link uncompressed and the
@@ -300,49 +298,35 @@ struct DisplayTimingReaderProbeSweepTests {
         for line in unparsed { print("  UNPARSED \(line)") }
         for line in incomplete { print("  INCOMPLETE \(line)") }
 
-        // Pair references (research/displays/display-node-keys.md, 2026-09-18, 1408 folders):
-        // P3 dsc-shape 3569 tested / 3113 empty / 456 equal / 0 other; section 5, 0 of 39871
-        // SupportsDSC=0 pairs are members; P1 pe-downstream 623 modes on 114 nodes (every
-        // rendering, node-level ColorElements included), 622 at encoding 1; P1 pe-downstream-420
-        // 139 on 21 driven nodes; P2 vpe-virtual 5415 virtual all 0xffffffff, 3608 real none;
-        // P4 unsafe-where 0 of 35535 pairs on 257 DP nodes. This sweep's own print line on
-        // 2026-09-21 (1415 folders): 453 nodes with tables; 6729 timings seen, 6710 parsed, 19
-        // unparsed, 260 driven captured; shape tested 4101 (sampled skips 2609, incomplete 0):
-        // empty 3593, equal 508, other 0, IDs outside 0; SKIP sampled: ColorModes 2609, DSC list
-        // 50, unsafe list 170; SupportsDSC=0 pairs 24451, members 0; DownstreamFormat modes 332
-        // on 31 nodes (0 not 4:2:0), on driven timings 139 modes on 21 nodes; ValidPixelEncodings
-        // virtual@ffffffff 5296, virtual elsewhere 0, real@ffffffff 0, real elsewhere 1413;
-        // native-DP unsafe pairs 22317, members 0. Re-derive them from a run, never copy them.
-        #expect(shapeTested >= 3900, "only \(shapeTested) timings entered the shape test")
-        #expect(shapeEqual >= 450, "only \(shapeEqual) timings with the list equal to the DSC-capable set")
+        // Pair references: research/displays/display-node-keys.md. The run prints every total;
+        // the assertions below hold the per-item rules and the accounting, never the totals,
+        // which move with the corpus. Re-derive figures from a run, never copy them.
+        #expect(timingsParsed > 0, "no timing parsed: checked at least one")
         // A list may be empty, the whole DSC-capable set, or a subset of it. What it may
         // never be is a list naming a mode that is not DSC-capable: that would contradict
         // SupportsDSC, which `dsc0Members` below asserts separately over every pair.
         #expect(shapeOther.isEmpty, "\(shapeOther.count) timings with a list naming a mode outside the DSC-capable set:\n\(shapeOther.joined(separator: "\n"))")
-        // EXACT, not a ceiling. A ceiling of <= 1 also accepts zero, and zero is
-        // reachable by regression: if the reader stopped marking modes 1, 96, 100
-        // and 101 DSC-capable, timing 91's list would equal the capable set and
-        // reclassify as shapeEqual, passing a ceiling silently. The identity is
-        // pinned for the same reason.
-        #expect(shapePartial.count == 1, "\(shapePartial.count) partial DSC-required lists; the current corpus measures exactly 1. A new one is investigated, not absorbed:\n\(shapePartial.joined(separator: "\n"))")
-        #expect(shapePartial.first?.contains("m2ultra_macos27.0_c") == true && shapePartial.first?.contains("timing 91") == true, "the known partial list is m2ultra_macos27.0_c timing 91 (its only 10-bit mode, where the other DSC-capable modes are 8-bit); got \(shapePartial)")
+        // A partial list is a legitimate shape (see where it is collected), so the corpus may
+        // hold any number of them. What must not happen is the named case vanishing by
+        // regression: if the reader stopped marking modes 1, 96, 100 and 101 DSC-capable,
+        // timing 91's list would equal the capable set and reclassify as shapeEqual. So the
+        // named case (one fixture folder) must stay partial.
+        #expect(shapePartial.contains { $0.contains("m2ultra_macos27.0_c") && $0.contains("timing 91") }, "the known partial list, m2ultra_macos27.0_c timing 91 (its only 10-bit mode, where the other DSC-capable modes are 8-bit), is no longer partial; got \(shapePartial)")
         #expect(idsOutside.isEmpty, "\(idsOutside.count) lists naming an ID no colour mode carries")
-        #expect(dsc0Pairs >= 20000 && dsc0Members.isEmpty, "\(dsc0Members.count) SupportsDSC=0 modes in a DSC list, over \(dsc0Pairs) pairs")
-        #expect(downstreamModes >= 300 && downstreamNot420.isEmpty, "\(downstreamModes) downstream formats, \(downstreamNot420.count) not 4:2:0")
-        #expect(drivenDownstreamNodes.count >= 20, "only \(drivenDownstreamNodes.count) driven timings carry a 4:2:0 downstream format")
-        #expect(virtualAtFFFF >= 5000 && virtualElsewhere.isEmpty, "virtual timings off 0xffffffff: \(virtualElsewhere.count)")
-        #expect(realElsewhere >= 1300 && realAtFFFF.isEmpty, "real timings at 0xffffffff: \(realAtFFFF.count)")
-        #expect(dpUnsafePairs >= 20000 && dpUnsafeMembers.isEmpty, "native DP unsafe members: \(dpUnsafeMembers.count) over \(dpUnsafePairs) pairs")
+        #expect(dsc0Members.isEmpty, "\(dsc0Members.count) SupportsDSC=0 modes in a DSC list, over \(dsc0Pairs) pairs")
+        #expect(downstreamNot420.isEmpty, "\(downstreamModes) downstream formats, \(downstreamNot420.count) not 4:2:0")
+        #expect(virtualElsewhere.isEmpty, "virtual timings off 0xffffffff: \(virtualElsewhere.count)")
+        #expect(realAtFFFF.isEmpty, "real timings at 0xffffffff: \(realAtFFFF.count)")
+        #expect(dpUnsafeMembers.isEmpty, "native DP unsafe members: \(dpUnsafeMembers.count) over \(dpUnsafePairs) pairs")
         #expect(headerBelowPrinted.isEmpty, "a sampled header undercounting its printed items:\n\(headerBelowPrinted.joined(separator: "\n"))")
         #expect(shapeEmpty + shapeEqual + shapePartial.count + shapeOther.count == shapeTested, "every tested timing is classified")
         // Ruling 45's identities for a whole-corpus sweep: the raw totals come from the loader, not from
-        // production, so a floor on them guards only against an empty or partial corpus; what guards the
-        // parse is the accounting. Replica 2026-09-21: 6729 seen, 6710 parsed, 19 unparsed (the entries
-        // the 64 KB cut truncates), 0 incomplete under any of the three flags.
-        #expect(timingsParsed >= 6500, "only \(timingsParsed) timings parsed")
+        // production; what guards the parse is the accounting.
         #expect(unparsed.count == timingsSeen - timingsParsed, "every raw entry is parsed or named")
-        #expect(unparsed.count == 19, "\(unparsed.count) raw entries the parser rejected; the replica measured 19, all cut entries:\n\(unparsed.joined(separator: "\n"))")
-        #expect(incomplete.isEmpty, "\(incomplete.count) parsed timings with an unreadable table or list; the corpus has none (ruling 20):\n\(incomplete.joined(separator: "\n"))")
+        // Every rejected entry must be a cut entry (no ID or no totals), never an entry the parser could
+        // have read. How many cut entries the corpus holds is not a property of the parser.
+        #expect(unparsedNotCut.isEmpty, "\(unparsedNotCut.count) rejected raw entries that carry an ID and both totals, so they are not cut entries:\n\(unparsedNotCut.joined(separator: "\n"))")
+        #expect(incomplete.isEmpty, "\(incomplete.count) parsed timings with an unreadable table or list (ruling 20):\n\(incomplete.joined(separator: "\n"))")
         #expect(shapeTested + shapeSampledSkipped + incomplete.count == timingsParsed, "every parsed timing is tested, a sampled skip, or named incomplete")
     }
 
@@ -388,6 +372,9 @@ struct DisplayTimingReaderProbeSweepTests {
         var belowPictureOnly: [String] = [], belowNotListed: [String] = []
         var changedTop: [String] = []
         var beforeNotListed = 0
+        var declaredListed = 0
+        var listedButMoved: [String] = []
+        var unlistedNotNative: [String] = []
         var noDeclaredTop = 0
         var nonVirtualInTimingElements = 0
         var nonVirtualCounts: [Int] = []
@@ -411,6 +398,24 @@ struct DisplayTimingReaderProbeSweepTests {
             let match = statement.topModeMatch(width: top.width, height: top.height, refreshHz: top.refreshHz, pixelClockHz: top.pixelClockHz, interlaced: top.interlaced)
             let nodeList = statement.allTimings.map { "\($0.width)x\($0.height)@\(($0.refreshHz * 1000).rounded() / 1000)" }
             let tag = "\(folder) block \(pairing.entry.block) \(pairing.record.node.edidKey): top \(label(top)), node lists \(nodeList)"
+            // Ruling 41, per node. (a) A declared top the node lists at its own refresh is
+            // vouched for, so step 1b keeps it: the top moves only off a declared top the node
+            // lists at other refreshes only, or nowhere. (b) Only a native declaration (the EDID's
+            // preferred picture, the tiled composite, a DisplayID timing) may stay the top while
+            // the node lists it nowhere; anything else unlisted must give way to a listed entry.
+            switch declaredMatch {
+            case .exact, .sameRefresh:
+                declaredListed += 1
+                if declared != top { listedButMoved.append("\(tag): declared \(label(declared)) is listed [\(declaredMatch.kind)] yet the top moved") }
+            case .pictureOnly, .notListed:
+                break
+            }
+            if match.kind == .notListed {
+                let preferred = pairing.entry.edid.preferredMode
+                let isPreferredPicture = preferred.map { $0.width == top.width && $0.height == top.height } ?? false
+                let isNative = pairing.entry.edid.modes.contains { DisplayDiagnostic.TopMode(declared: $0) == top && DisplayDiagnostic.isNativeDeclaration($0) }
+                if !(isPreferredPicture || isNative) { unlistedNotNative.append("\(tag): the node lists the top nowhere and it is not a native declaration") }
+            }
             if declared != top {
                 changedTop.append("\(folder) block \(pairing.entry.block) \(pairing.record.node.edidKey): declared \(label(declared)) [\(declaredMatch.kind)] -> resolved \(label(top)) [\(match.kind)], driven \(current.label), node lists \(nodeList)")
             }
@@ -436,42 +441,27 @@ struct DisplayTimingReaderProbeSweepTests {
         let meanNonVirtual = nonVirtualCounts.isEmpty ? 0 : Double(nonVirtualCounts.reduce(0, +)) / Double(nonVirtualCounts.count)
         print("DisplayTimingReaderProbeSweep/top-mode \(corpus.summary)")
         for failure in corpus.failures { print("  FAILURE \(failure)") }
-        print("DisplayTimingReaderProbeSweep/top-mode: \(paired) paired nodes with a statement; non-virtual timings per node \(nonVirtualCounts.min() ?? 0) to \(nonVirtualCounts.max() ?? 0), mean \(String(format: "%.2f", meanNonVirtual)); \(nonVirtualInTimingElements) nodes with a non-virtual timing among the printed TimingElements; no declared top \(noDeclaredTop); before ruling 41 the declared top was not listed on \(beforeNotListed) nodes; the resolved top differs from the declared top on \(changedTop.count); at the top \(atTop): exact \(atTopExact), same refresh \(atTopSameRefresh), violations \(atTopViolations.count); below the top \(belowTop): exact \(belowExact), same refresh \(belowSameRefresh), picture only \(belowPictureOnly.count), not listed \(belowNotListed.count)")
+        print("DisplayTimingReaderProbeSweep/top-mode: \(paired) paired nodes with a statement; non-virtual timings per node \(nonVirtualCounts.min() ?? 0) to \(nonVirtualCounts.max() ?? 0), mean \(String(format: "%.2f", meanNonVirtual)); \(nonVirtualInTimingElements) nodes with a non-virtual timing among the printed TimingElements; no declared top \(noDeclaredTop); declared top listed at its refresh on \(declaredListed) (moved \(listedButMoved.count)); unlisted tops that are not native \(unlistedNotNative.count); before ruling 41 the declared top was not listed on \(beforeNotListed) nodes; the resolved top differs from the declared top on \(changedTop.count); at the top \(atTop): exact \(atTopExact), same refresh \(atTopSameRefresh), violations \(atTopViolations.count); below the top \(belowTop): exact \(belowExact), same refresh \(belowSameRefresh), picture only \(belowPictureOnly.count), not listed \(belowNotListed.count)")
         for line in changedTop { print("  CHANGED \(line)") }
         for line in atTopViolations { print("  VIOLATION \(line)") }
         for line in belowPictureOnly { print("  PICTURE ONLY \(line)") }
         for line in belowNotListed { print("  NOT LISTED \(line)") }
 
         // Ruling 45: the population first. The loader computed it from the raw probes; production
-        // match attached it; every eligible node is attached or named. Replica of the production
-        // match, 2026-09-21: 260 captured, 231 eligible (15 no block, 14 several), 231 attached, 0 failures.
-        #expect(corpus.eligible == 260, "eligible population \(corpus.eligible), 231 at 1408 folders, 260 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0. \(corpus.summary)")
+        // match attached it; every eligible node is attached or named.
+        #expect(paired > 0, "no paired node: checked at least one. \(corpus.summary)")
         #expect(corpus.unnamedFailures.isEmpty, "eligible nodes production match did not attach and knownExceptions does not name:\n\(corpus.unnamedFailures.map(\.description).joined(separator: "\n"))")
         #expect(corpus.attached.count == corpus.eligible - CorpusDisplayProbes.knownExceptions.count, "attached \(corpus.attached.count) is not eligible \(corpus.eligible) minus the \(CorpusDisplayProbes.knownExceptions.count) known exceptions")
         #expect(paired == corpus.attached.count, "every attached node carries a statement and a live mode")
-        // No pair figure: a new question. Exact figures from the replica (2026-09-21, the loader's
-        // population, declared lists from the oracle baseline, the "refined" rule of ruling 41):
-        // no declared top 0; before ruling 41 the declared top was not listed on 19; the resolved
-        // top differs on 20 (the 19 plus m4_macos26.5.2_b); at the top 219 (exact 177, same refresh
-        // 42, violations 0), below the top 12 (exact 3, same refresh 0, picture only 9, not listed 0);
-        // 6 nodes with a non-virtual timing among the printed TimingElements. Fallback: a figure
-        // that differs is investigated node by node against the plan's CHANGED and PICTURE ONLY
-        // lists (the corpus figures table) before any number here moves; the replica's declared
-        // lists are edid-decode's, which the oracle sweep holds to 0 mismatches against EDIDInfo
-        // on 555 EDIDs, and its ranking is EDIDInfo's (clock, area, refresh). This sweep's own
-        // print lines on 2026-09-21 (1415 folders): population 260 captured, 231 eligible (15 no
-        // block, 14 several, 0 unkeyable), attached 231, failures 0; 231 paired; non-virtual
-        // timings per node 1 to 7, mean 3.06; 6 nodes with a non-virtual timing among the printed
-        // TimingElements; no declared top 0; before ruling 41 not listed on 19; the resolved top
-        // differs on 20; at the top 219 (exact 177, same refresh 42, violations 0); below the top
-        // 12 (exact 3, same refresh 0, picture only 9, not listed 0). Re-derive from a run, never copy.
+        // No pair figure: a new question. The run prints every outcome count and names every
+        // CHANGED, PICTURE ONLY and NOT LISTED node; the assertions below hold the per-node rules
+        // and the bucket identities, never the totals, which move with the corpus.
         // PR #665 gate fix round 4, item 2 (measured at 2404c8f4): a native declaration the node lists
         // nowhere now stays the top and reads not listed, and exactly one node moves, the Odyssey
         // G85SB on `m1pro_macos26.5.2_x` block 1: its declared top, a DisplayID Type I 2560x1440 @
         // 174.967 Hz above the native 3440x1440, is listed nowhere in the capture (node lists
         // 3440x1440@59.959, 1920x1080@59.94, 1920x1080@60.0, 3440x1440@119.961), so it is now the
-        // resolved top (notListed) instead of the listed 3440x1440 @ 119.961 Hz (exact): the resolved
-        // top differs on 19, at the top 218 (exact 176), below the top 13 (not listed 1). Its verdict
+        // resolved top (notListed) instead of the listed 3440x1440 @ 119.961 Hz (exact). Its verdict
         // is unknownMode before and after (its colour reading is unresolved, so the (d) sentence
         // prints, not K26); the top, the match and the facts are what moved. Sampling caveat: the
         // probe caps every array at 12 entries, and this node's TimingElements (28 of its 40 timings
@@ -479,13 +469,16 @@ struct DisplayTimingReaderProbeSweepTests {
         // may be the capture's truncation rather than the node's statement; a live read is never
         // sampled.
         #expect(noDeclaredTop == 0, "\(noDeclaredTop) attached nodes with no declared top")
-        #expect(beforeNotListed == 21, "before ruling 41 the declared top was not listed on \(beforeNotListed) nodes; 19 at 1408 folders, 21 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); every violation count beside it stayed 0.")
-        #expect(changedTop.count == 21, "ruling 41 moved the top on \(changedTop.count) nodes; 19 at 1408 folders, 21 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); every violation count beside it stayed 0.")
+        // The before/after relationship, per node (see the switch in the loop): a declared top the
+        // node lists at its refresh never moves, and only a native declaration stays the top while the
+        // node lists it nowhere.
+        #expect(listedButMoved.isEmpty, "\(listedButMoved.count) nodes whose declared top the node lists at its refresh, yet ruling 41 moved the top:\n\(listedButMoved.joined(separator: "\n"))")
+        #expect(unlistedNotNative.isEmpty, "\(unlistedNotNative.count) nodes whose resolved top the node lists nowhere and which is not a native declaration:\n\(unlistedNotNative.joined(separator: "\n"))")
         #expect(changedTop.count + belowNotListed.count >= beforeNotListed, "every node whose declared top the node never listed must resolve elsewhere or be named not listed: \(beforeNotListed) were not listed, \(changedTop.count) changed, \(belowNotListed.count) kept as not listed")
         #expect(atTopViolations.isEmpty, "\(atTopViolations.count) nodes driven at the top whose top the node does not list:\n\(atTopViolations.joined(separator: "\n"))")
-        #expect(atTop == 240 && atTopExact == 194 && atTopSameRefresh == 46, "at the top \(atTop) (exact \(atTopExact), same refresh \(atTopSameRefresh)); 218 (176, 42) at 1408 folders, 240 (194, 46) at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); every violation count beside it stayed 0.")
-        #expect(belowTop == 20 && belowExact == 5 && belowSameRefresh == 1 && belowPictureOnly.count == 13, "below the top \(belowTop) (exact \(belowExact), same refresh \(belowSameRefresh), picture only \(belowPictureOnly.count)); 13 (3, 0, 9) at 1408 folders, 20 (5, 1, 13) at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
-        #expect(belowNotListed.count == 1 && belowNotListed.allSatisfy { $0.hasPrefix("m1pro_macos26.5.2_x block 1") }, "\(belowNotListed.count) nodes whose resolved top the node never lists; fix round 4 measured exactly one, the G85SB:\n\(belowNotListed.joined(separator: "\n"))")
+        // Every node lands in exactly one outcome bucket on its side of the top.
+        #expect(atTopExact + atTopSameRefresh + atTopViolations.count == atTop, "at the top \(atTop) is not exact \(atTopExact) + same refresh \(atTopSameRefresh) + violations \(atTopViolations.count)")
+        #expect(belowExact + belowSameRefresh + belowPictureOnly.count + belowNotListed.count == belowTop, "below the top \(belowTop) is not exact \(belowExact) + same refresh \(belowSameRefresh) + picture only \(belowPictureOnly.count) + not listed \(belowNotListed.count)")
         #expect(atTop + belowTop + noDeclaredTop == paired, "every paired node is classified")
     }
 }

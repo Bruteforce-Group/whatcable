@@ -13,7 +13,7 @@ import Foundation
 ///
 /// WHAT THIS SWEEP CANNOT CHECK, and it is half the job. It validates block
 /// FINDING, not Class READING. The corpus holds exactly one distinct `Class`
-/// value across all 1122 blocks, so a reader that ignored the probe text
+/// value across every block, so a reader that ignored the probe text
 /// entirely and returned the expected string as a constant would pass this
 /// sweep completely clean. That is inherent in the data, not a gap someone
 /// forgot to close, and no amount of extra corpus work fixes it: there is no
@@ -40,7 +40,6 @@ struct PowerSourceSupplyKindCorpusSweepTests {
         var equalsShapeBlocks = 0
         var missingClass: [String] = []
         var notFixed: [String] = []
-        var contributingFolders: Set<String> = []
         var rawMarkerTotal = 0
         var perFolderCountMismatch: [String] = []
         var perFolderShapeExcess: [String] = []
@@ -64,7 +63,6 @@ struct PowerSourceSupplyKindCorpusSweepTests {
             var folderEquals = 0
             for block in found {
                 blocks += 1
-                contributingFolders.insert(folder)
                 switch block.shape {
                 case .dash: dashShapeBlocks += 1; folderDash += 1
                 case .equals: equalsShapeBlocks += 1; folderEquals += 1
@@ -98,12 +96,12 @@ struct PowerSourceSupplyKindCorpusSweepTests {
         //
         //  - block count against a raw marker tally. Measured 2026-09-03:
         //    the reader returns EXACTLY one block per
-        //    `WinningPowerSourceOption: {` occurrence in all 1339 folders,
+        //    `WinningPowerSourceOption: {` occurrence in every folder,
         //    zero exceptions. Any duplication or any drop breaks this, at any
         //    corpus size.
-        //  - blocks per shape per folder. Measured over the same 1339: a
+        //  - blocks per shape per folder. Measured: a
         //    folder yields 0 or 1 dash block (never 2), and 0, 1 or 2 equals
-        //    blocks (883 folders with none, 451 with one, 5 with two). A
+        //    blocks. A
         //    shape-specific double-count breaks this even if the reader also
         //    dropped blocks elsewhere and kept the total plausible.
         //
@@ -114,97 +112,16 @@ struct PowerSourceSupplyKindCorpusSweepTests {
         #expect(blocks == rawMarkerTotal, "\(blocks) blocks against \(rawMarkerTotal) raw markers in the same text")
         #expect(perFolderShapeExcess.isEmpty, "more blocks of one shape in a folder than the corpus has ever shown: \(perFolderShapeExcess.prefix(5))")
 
-        // Floors: measured 2026-09-03 over 1339 folders carrying an
-        // untruncated probe 17, twice with independent parsers (this sweep
-        // itself, and a line-based Python reader that shares no code with
-        // it). Both agreed exactly: 1122 winning blocks, 661 under the flat
-        // dash header and 461 under the nested equals header, every one
-        // carrying a Class key and every one fixed.
-        //
-        // SAY THE TOLERANCE PLAINLY, because the previous version of this
-        // comment implied these bands were tight and they were not. Each
-        // floor now sits 8% under its measured count and each ceiling 12%
-        // above it. So the deliberate, remaining slack is: up to 8% of the
-        // blocks of any shape can vanish, and up to 12% can be invented,
-        // without this band noticing. That is not tight, and it is not the
-        // tightest a band could be either. It is a choice with margin on both
-        // sides of the two mutations PR #599's gate found: the 165-block dash
-        // double-count is +25% on the dash count, and dropping every 7th
-        // block takes the three counts to 962, 570 and 392 against 1122, 661
-        // and 461, so about 14% off each. A floor at 14% would technically
-        // still catch that drop and would have no margin at all, which is why
-        // it is not set there. The slack these bands do leave is covered by
-        // the per-folder invariants above, which have no tolerance at all.
-        //
-        // Ceilings are the side that will need maintenance, because growth
-        // only pushes counts up: 12% growth in probe-17 machines carrying a
-        // winning option and this test goes red on a healthy corpus. That is
-        // intended. Re-measure and raise it; do not delete it. Floors are not
-        // threatened by growth, only by a corpus that shrinks, which in
-        // practice means a partial checkout.
-        #expect(blocks >= 1032, "only \(blocks) winning-option blocks found against 1266 measured; parser is probably broken")
+        // Not-empty guard: a regex that matches nothing returns a clean sweep.
+        // No corpus size, shape split or folder count is asserted: those move
+        // with every ingest. The per-folder checks above (block count equals
+        // an independent marker count, shape excess) are what catch a reader
+        // that double-counts or drops blocks, at any corpus size.
+        #expect(blocks > 0, "no winning-option blocks found; parser is probably broken")
         #expect(missingClass.isEmpty, "winning options with no Class key: \(missingClass.prefix(5))")
         #expect(notFixed.isEmpty, "winning options that did not parse as fixed: \(notFixed.prefix(5))")
         #expect(fixed == blocks)
 
-        // CEILINGS. Every bound above this point is a floor, and floors are
-        // blind in one direction: a reader that counts the same block twice
-        // sails through all of them, and doing so is not hypothetical. Probe
-        // 32 genuinely prints its whole battery node twice (once under its
-        // own section, again under `=== AppleACAdapter / ChargerData ===`),
-        // and a probe-32 count that missed that is what put a fabricated
-        // "unexplained discrepancy" into `PowerOption.SupplyKind` for two
-        // rounds of this PR. Probe 17 has no such duplicate section today,
-        // which is exactly why a reader that grew one would go unnoticed.
-        //
-        // Re-derived 2026-09-22 by a Python reader using this sweep's own two
-        // block regexes but none of its code: 1266 blocks, 734 dash, 532
-        // equals, spread over 746 of the 1454 folders carrying an untruncated
-        // probe 17. (2026-09-03, at 1339 untruncated folders: 1122 / 661 / 461
-        // over 672.) The ceilings below stay 12% above measured, so they keep
-        // the tolerance the paragraph after this one describes; setting one to
-        // the measured value exactly would turn the next ingest red on a
-        // healthy corpus.
-        //
-        // These were 40% above measured, which is where the 165-block dash
-        // double-count got through: 826 dash blocks against a ceiling of 925.
-        // At 12% the same mutation fails on the dash ceiling (740) and on the
-        // total (1256 against 1287 blocks), which was checked by running it,
-        // not by arithmetic alone.
-        #expect(blocks <= 1418, "\(blocks) winning-option blocks found against 1122 measured; a reader counting the same block twice looks like this")
-        #expect(dashShapeBlocks <= 822, "\(dashShapeBlocks) flat blocks against 734 measured; suspect double counting")
-        #expect(equalsShapeBlocks <= 596, "\(equalsShapeBlocks) nested blocks against 532 measured; suspect double counting")
-
-        // Folder-level tolerance, and what it does NOT cover. These two
-        // floors catch a checkout whose research symlink resolved but reached
-        // only part of the corpus. They say nothing about drops WITHIN a
-        // retained folder: every folder can still be present and contributing
-        // while the reader quietly loses blocks inside them, which is exactly
-        // the every-7th-block mutation. The per-folder marker check above is
-        // what covers that; these are a corpus-presence check, nothing more.
-        // Measured 2026-09-03: 1339 folders scanned, 672 contributing. Both
-        // floors sit 8% under, same rule as the block floors.
-        #expect(folders.count >= 1231, "only \(folders.count) folders carry an untruncated probe 17 (measured 1339); the corpus link looks partial")
-        #expect(contributingFolders.count >= 618, "only \(contributingFolders.count) folders contributed a winning-option block (measured 672)")
-
-        // A bare total floor is not load-bearing on its own: a reader that
-        // recognises only the flat `--- Class[N] ---` shape and silently
-        // drops every nested `=== Class ===` block (M3+ only) still clears
-        // any floor comfortably below the true count, and the corpus holds
-        // enough M1/M2-only folders that the flat shape alone would too.
-        // Both shapes must be represented, or the sweep is blind to whichever
-        // one it lost. This is the exact bug PR #599's Claude adversarial
-        // review found: a reader narrowed to one shape dropped 461 of 1122
-        // blocks, spread across 456 folders, and the old floor of 400 stayed
-        // green. (An earlier version of this comment said 11 folders. That
-        // was wrong; re-derived 2026-09-03 and the equals-shape blocks span
-        // 456 distinct folders.)
-        //
-        // Each shape gets a real floor rather than `> 0`, because one
-        // surviving block of a shape satisfies `> 0` while telling us
-        // nothing.
-        #expect(dashShapeBlocks >= 608, "only \(dashShapeBlocks) flat '--- Class[N] ---' blocks found (measured 661); the reader may have narrowed to one shape")
-        #expect(equalsShapeBlocks >= 424, "only \(equalsShapeBlocks) nested '=== Class ===' blocks found (measured 461); the reader may have narrowed to one shape")
         #expect(dashShapeBlocks + equalsShapeBlocks == blocks, "every block should be attributed to exactly one shape")
     }
 

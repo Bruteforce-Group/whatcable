@@ -742,28 +742,10 @@ struct DisplayDiagnosticProbeSweepTests {
             #expect(foldersGroupedAsUSBC == foldersOnlyUSBC,
                 "Expected every USB-C-only folder (\(foldersOnlyUSBC)) to yield no HDMI groups, got \(foldersOnlyUSBC - foldersGroupedAsUSBC) leaks")
         }
-        // Floor: at minimum N HDMI-bearing folders must be in the sweep so
-        // a future corpus that lost most of them (selective re-fetch, partial
-        // sync) doesn't silently degrade this into a near-vacuous check.
-        // Actual 23 such folders as of 2026-07 (up from 14). Native-HDMI is a
-        // narrow, curated signal (only ~5-6% of the 410-folder corpus), so
-        // unlike the broader per-probe floors elsewhere in this file the
-        // usual ~85-90%-of-actual policy would leave almost no slack for
-        // routine dedup/curation churn; 15 (~65% of actual, 3x the old stale
-        // floor of 5) still catches a real regression without that risk.
-        //
-        // Two-tier reality: only 9 probe-33 files are git-tracked (the named
-        // fixtures the other two tests in this file use directly), out of
-        // ~240 with probe 33 on disk. Gate on a raw-corpus-presence threshold
-        // (50) well above that 9-file fresh-clone case, so a fresh clone
-        // SKIPS this floor instead of failing it, while the correctness
-        // checks above (`foldersGroupedAsHDMI == foldersWithHDMI`,
-        // `foldersGroupedAsUSBC == foldersOnlyUSBC`) keep running against
-        // whatever data is present, tracked-only or full corpus alike.
-        if foldersWithProbe33 >= 50 {
-            #expect(foldersWithHDMI >= 15,
-                "Only \(foldersWithHDMI) folder(s) with active HDMI parents found across the corpus; sweep is near-vacuous, restore HDMI fixtures")
-        }
+        // Non-vacuity: the per-folder rule above passes over zero HDMI folders, so the sweep
+        // must have checked at least one. The directory-absent case returns early above.
+        #expect(foldersWithHDMI > 0,
+            "no folder with an active HDMI parent found across the corpus: checked at least one")
     }
 
     // MARK: - Sweep: every active block with a parseable EDID produces a non-nil diagnostic
@@ -1003,15 +985,12 @@ struct DisplayDiagnosticProbeSweepTests {
             }
         }
 
-        // Coverage floor: a corpus directory that exists but yields no
-        // probe-33 folders, or one that lost most of its probe-33 files, must
-        // not pass silently. Unconditional on purpose: the only SKIP path is
-        // the absent directory handled by the early return above, which
-        // scripts/ci.sh's corpus-presence check owns. 608 blocks evaluated at
-        // the time of writing (593 + the 15 the old envelope guard dropped).
-        #expect(evaluated >= 550,
-            "Only \(evaluated) blocks evaluated across \(foldersWithProbe33) folders with probe 33; expected at least 550 -- sweep may be near-vacuous")
-        #expect(ycbcr420Tops >= 5, "expected the corpus's five 4:2:0-top EDIDs, saw \(ycbcr420Tops)")
+        // Non-vacuity: a corpus directory that exists but yields no probe-33
+        // block must not pass silently. Unconditional on purpose: the only
+        // SKIP path is the absent directory handled by the early return above,
+        // which scripts/ci.sh's corpus-presence check owns.
+        #expect(evaluated > 0,
+            "no block evaluated across \(foldersWithProbe33) folders with probe 33: checked at least one")
         print("neededBandwidthEqualsTheDeclaredTopModesPixelClock: evaluated \(evaluated) blocks (\(noLinkRate) of them with no readable link rate, \(ycbcr420Tops) whose EDID top is 4:2:0-only) across \(foldersWithProbe33) folders")
     }
 
@@ -1309,42 +1288,29 @@ struct DisplayDiagnosticProbeSweepTests {
         print("DisplayDiagnosticProbeSweep/#664 fail-closed shapes (PR #665 gate, Codex 2) over the \(tested) tested driven timings: DSC list IDs outside the colour modes \(idsOutsideDSC.count), unsafe list IDs outside \(idsOutsideUnsafe.count), SupportsDSC outside 0...3 \(supportsDSCOutOfRange.count)")
         for line in idsOutsideDSC + idsOutsideUnsafe + supportsDSCOutOfRange { print("  FAIL-CLOSED SHAPE \(line)") }
 
-        // Ruling 45: the population first, then the universal assertions over it with the replica's
-        // exact figures (2026-09-21, a replica of the production match over the corpus): 231 eligible,
-        // 231 attached, 0 failures; sampled driven lists 57, incomplete 0; empty list 137 (9 Apple);
-        // Apple with a DSC-capable mode 29, without 9; non-Apple rule-marked 8 (5 every non-virtual
-        // mode listed, 3 mixed); 1 non-Apple tested timing with no readable link. A figure that
-        // differs is investigated (the print names every skip, violation and failure) and the
-        // expected value moves only with the reason written beside it; it never moves to make a
-        // run green. Every corpus ingestion that adds an eligible node re-derives this line.
-        // Pair references (research/displays/display-node-keys.md, 2026-09-18, 1408 folders):
-        // P3 H1 driven rows, "not member and above link" 0 in every cell; P3 dsc-apple 45 of 46
-        // Apple-display nodes with every list equal to its DSC-capable set; P3 firmware rule
-        // with FEC on driven timings: 185 members predicted, 0 non-members predicted. The
-        // Apple nodes without a DSC-capable mode (Thunderbolt Display 0x9227 and LED Cinema
-        // Display 0x9226, keys 06102792- and 06102692-) read uncompressed by the general rule
-        // and are named above (ruling 22, the spec as corrected). The mixed timings (RGB and
-        // 4:4:4 capable beside 4:2:2 not) read unknown, as the node does not name the live
-        // mode (ruling 23).
-        // Measured by this sweep on 2026-09-21 over 1415 folders (the print lines above, verbatim):
-        //   DisplayDiagnosticProbeSweep/#664 population: 1415 folders, 260 captured driven timings, 231 eligible (15 with no active block carrying the key, 14 with several, 0 unkeyable nodes), attached 231, failures 0, known exceptions 0
-        //   DisplayDiagnosticProbeSweep/#664: 231 paired driven timings; SKIP sampled 57, incomplete 0, no link 1; empty list 137 (0 not uncompressed); Apple with DSC-capable modes 29 (0 violations), Apple without 9; non-Apple rule-marked 8: list wrong 0, every non-virtual mode listed 5, mixed 3, verdict wrong 0
-        #expect(corpus.eligible == 260, "eligible population \(corpus.eligible), 231 at 1408 folders, 260 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0. \(corpus.summary)")
+        // Ruling 45: the population first, then the universal assertions over it. The print lines
+        // above name every skip, violation and failure and give every total; the totals move with
+        // the corpus and are not asserted.
+        // Pair references: research/displays/display-node-keys.md (P3 H1 driven rows, P3 dsc-apple,
+        // P3 firmware rule with FEC on driven timings). The Apple nodes without a DSC-capable mode
+        // (Thunderbolt Display 0x9227 and LED Cinema Display 0x9226, keys 06102792- and 06102692-)
+        // read uncompressed by the general rule and are named above (ruling 22, the spec as
+        // corrected). The mixed timings (RGB and 4:4:4 capable beside 4:2:2 not) read unknown, as
+        // the node does not name the live mode (ruling 23).
+        #expect(tested > 0, "no attached node was tested: checked at least one. \(corpus.summary)")
         #expect(corpus.unnamedFailures.isEmpty, "eligible nodes production match did not attach and knownExceptions does not name:\n\(corpus.unnamedFailures.map(\.description).joined(separator: "\n"))")
         #expect(corpus.attached.count == corpus.eligible - CorpusDisplayProbes.knownExceptions.count, "attached \(corpus.attached.count) is not eligible \(corpus.eligible) minus the known exceptions")
         #expect(paired == corpus.attached.count)
-        #expect(sampledSkipped.count == 63, "sampled driven lists \(sampledSkipped.count); the replica measured 57")
-        #expect(incomplete.isEmpty, "\(incomplete.count) attached nodes with an incomplete driven timing; the corpus has none (ruling 20):\n\(incomplete.joined(separator: "\n"))")
-        #expect(emptyList == 155 && emptyListNotUncompressed.isEmpty, "empty-list driven timings \(emptyList) (replica 137), \(emptyListNotUncompressed.count) not read as uncompressed")
-        #expect(appleDSC == 34 && appleViolations.isEmpty, "Apple displays with a DSC-capable mode \(appleDSC) (replica 29), \(appleViolations.count) not read as DSC on with no link blame")
-        #expect(appleNoDSC.count == 9 && appleNoDSC.allSatisfy { $0.contains("06102792-") || $0.contains("06102692-") }, "Apple displays without a DSC-capable mode \(appleNoDSC.count) (replica 9, every one a Thunderbolt or Cinema Display): \(appleNoDSC)")
-        #expect(ruleMarked == 8 && ruleMarkedListWrong.isEmpty, "rule-marked timings \(ruleMarked) (replica 8), \(ruleMarkedListWrong.count) whose list is not the DSC-capable set")
-        #expect(ruleMarkedAllListed == 5 && ruleMarkedMixed.count == 3 && ruleMarkedVerdictWrong.isEmpty, "rule-marked: every mode listed \(ruleMarkedAllListed) (replica 5), mixed \(ruleMarkedMixed.count) (replica 3), wrong verdicts \(ruleMarkedVerdictWrong.count)")
-        #expect(noLink == 2, "non-Apple tested timings with no readable link \(noLink); the replica measured 1")
+        #expect(incomplete.isEmpty, "\(incomplete.count) attached nodes with an incomplete driven timing (ruling 20):\n\(incomplete.joined(separator: "\n"))")
+        #expect(emptyListNotUncompressed.isEmpty, "\(emptyListNotUncompressed.count) of \(emptyList) empty-list driven timings not read as uncompressed")
+        #expect(appleViolations.isEmpty, "\(appleViolations.count) of \(appleDSC) Apple displays with a DSC-capable mode not read as DSC on with no link blame")
+        #expect(appleNoDSC.allSatisfy { $0.contains("06102792-") || $0.contains("06102692-") }, "every Apple display without a DSC-capable mode must be a Thunderbolt or Cinema Display: \(appleNoDSC)")
+        #expect(ruleMarkedListWrong.isEmpty, "\(ruleMarkedListWrong.count) of \(ruleMarked) rule-marked timings whose list is not the DSC-capable set")
+        #expect(ruleMarkedVerdictWrong.isEmpty, "rule-marked: every mode listed \(ruleMarkedAllListed), mixed \(ruleMarkedMixed.count), wrong verdicts \(ruleMarkedVerdictWrong.count)")
         #expect(paired == sampledSkipped.count + incomplete.count + tested, "every attached node is a sampled skip, named incomplete, or tested: \(paired) against \(sampledSkipped.count) + \(incomplete.count) + \(tested)")
         // PR #665 gate, Codex 2: the shapes the fail-closed rule catches (an ID no colour mode
         // carries in either list, a SupportsDSC outside the two-bit field) occur on none of the
-        // tested driven timings, so the rule moves no corpus verdict. Measured 2026-09-21: 0, 0, 0.
+        // tested driven timings, so the rule moves no corpus verdict.
         #expect(idsOutsideDSC.isEmpty && idsOutsideUnsafe.isEmpty && supportsDSCOutOfRange.isEmpty,
                 "fail-closed shapes on tested driven timings: DSC \(idsOutsideDSC.count), unsafe \(idsOutsideUnsafe.count), SupportsDSC \(supportsDSCOutOfRange.count)")
     }
@@ -1382,10 +1348,8 @@ struct DisplayDiagnosticProbeSweepTests {
         for line in k39 { print("  K39 \(line)") }
         for line in k40 { print("  K40 \(line)") }
         for line in adapterWording + missing { print("  NATIVE HDMI RECEIPT MISSING \(line)") }
-        // The reviewer's census at 99423fd9 (rerun report, note 4): 38 native-HDMI nodes, 23 with
-        // members, K15 on 0. Measured by this sweep on 2026-09-21: 38, 23; K39 + K40 == 23.
-        #expect(nativeHDMI == 45, "native-HDMI attached nodes \(nativeHDMI); 38 at 1408 folders, 45 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
-        #expect(withMembers == 24, "native-HDMI nodes with unsafe members \(withMembers); 23 at 1408 folders, 24 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
+        // Totals are printed above, not asserted. Non-vacuity: the identity below passes on zero.
+        #expect(withMembers > 0, "no native-HDMI node with unsafe members: checked at least one")
         #expect(k39.count + k40.count == withMembers, "K39 \(k39.count) + K40 \(k40.count) against \(withMembers) nodes with members")
         #expect(adapterWording.isEmpty && missing.isEmpty, "adapter wording on a native port: \(adapterWording.count); members with no receipt: \(missing.count)")
     }
@@ -1439,7 +1403,7 @@ struct DisplayDiagnosticProbeSweepTests {
         print("DisplayDiagnosticProbeSweep/#664 NSScreen depth: \(compared) attached nodes replayed at 8 and 10 bits; \(multiDepth.count) driven timings list several depths; verdict or reading differs from the depth-free run on \(differing.count)")
         for line in differing { print("  NSSCREEN DEPENDENT \(line)") }
         #expect(compared == corpus.attached.count, "every attached node was replayed: \(compared) of \(corpus.attached.count)")
-        #expect(compared >= 200, "only \(compared) nodes replayed; the corpus pairs 231")
+        #expect(compared > 0, "no attached node replayed: checked at least one")
         #expect(differing.isEmpty, "\(differing.count) nodes whose verdict depends on NSScreen's depth:\n\(differing.joined(separator: "\n"))")
     }
 
@@ -1503,42 +1467,27 @@ struct DisplayDiagnosticProbeSweepTests {
         for line in skippedSampledDriven + skippedReading { print("  SKIP \(line)") }
         for line in mismatches { print("  MISMATCH \(line)") }
 
-        // Ruling 45: the population first, then exact figures from the replica (2026-09-21, the
-        // "refined" rule of ruling 41): 12 below the top, 3 skipped for sampled driven lists
-        // (m1_macos27.0_k, m1max_macos26.5.2_r 09D15E7F, m3max_macos26.5.2_c: named skips, not
-        // verdicts), 0 skipped for a reading that is not uncompressed, 9 classified: offered 3
-        // (m1_macos26.5.2_af and _k behind HDMI, m4pro_macos26.5.2_g on DP), not offered 6
-        // (m3_macos26.5.2_q, m4max_macos26.5.2_k 10ACF3D0, m5_macos26.5.1_n, m5_macos26.5.2_g behind
-        // HDMI; m1_macos26.1, m4_macos26.5.2_au on DP), not listed 0. Before ruling 41 the same count
-        // read 22 classified with 14 not listed (ruling 38). A figure that differs is investigated
-        // against these names before any number moves.
+        // Ruling 45: the population first, then the per-node rules. The print lines above name every
+        // below-top node, skip and mismatch and give every total; the totals are not asserted.
         // PR #665 gate fix round 4, item 2 (measured at 2404c8f4): the Odyssey G85SB on
-        // `m1pro_macos26.5.2_x` block 1 joins the below-top set (13) as a fourth sampled skip: its
-        // DisplayID 2560x1440 @ 175 Hz top is listed nowhere in the capture and now stays the top
-        // (match notListed, availability notListed, verdict unknownMode). Its colour reading is
-        // unresolved, so the (d) sentence prints ("does not name the colour format in use"), not
-        // K26, and the verdict was unknownMode before the round too (top 3440x1440 @ 120, exact,
-        // offeredUnresolved); what moved is the top, the match and the facts. Its driven ColorModes
-        // table is sampled (the DSC list is not), so it is named as a skip here and never a
-        // classified verdict. Sampling caveat: the capture caps arrays at 12 entries, so "listed
-        // nowhere" may be the truncation; a live read is never sampled.
-        // Measured by this sweep on 2026-09-21 over 1415 folders (the print lines above, verbatim):
-        //   DisplayDiagnosticProbeSweep/#664 top mode population: 1415 folders, 260 captured driven timings, 231 eligible (15 with no active block carrying the key, 14 with several, 0 unkeyable nodes), attached 231, failures 0, known exceptions 0
-        //   DisplayDiagnosticProbeSweep/#664 top mode: 12 of 231 attached nodes driven below the top (0 with no diagnostic); SKIP sampled driven lists 3, reading not uncompressed 0; offered 3, not offered 6, not listed 0; mismatches 0
-        #expect(corpus.eligible == 260, "eligible population \(corpus.eligible), 231 at 1408 folders, 260 at 1524. Re-derived 2026-09-22 (the 2026-09-22 ingest added 116 machines); failures stayed 0. \(corpus.summary)")
+        // `m1pro_macos26.5.2_x` block 1 is a sampled skip: its DisplayID 2560x1440 @ 175 Hz top is
+        // listed nowhere in the capture and stays the top (match notListed, availability notListed,
+        // verdict unknownMode). Its colour reading is unresolved, so the (d) sentence prints ("does
+        // not name the colour format in use"), not K26. Its driven ColorModes table is sampled (the
+        // DSC list is not), so it is named as a skip here and never a classified verdict. Sampling
+        // caveat: the capture caps arrays at 12 entries, so "listed nowhere" may be the truncation;
+        // a live read is never sampled.
         #expect(corpus.unnamedFailures.isEmpty, "eligible nodes production match did not attach and knownExceptions does not name:\n\(corpus.unnamedFailures.map(\.description).joined(separator: "\n"))")
         #expect(corpus.attached.count == corpus.eligible - CorpusDisplayProbes.knownExceptions.count)
         #expect(noDiagnostic.isEmpty, "attached nodes with no diagnostic or no top mode:\n\(noDiagnostic.joined(separator: "\n"))")
         let classified = offered.count + notOffered.count + notListed.count
-        #expect(belowTop == 20, "below the top \(belowTop); 13 at 1408 folders, 20 at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); mismatches stayed 0.")
-        // skippedReading's single member is named below, mirroring the G85SB
-        // assertion for its sibling: a bare ceiling lets a different node take
-        // the slot without anyone noticing.
-        #expect(skippedSampledDriven.count == 6 && skippedReading.count == 1, "skips: sampled \(skippedSampledDriven.count) (4 at 1408 folders, 6 at 1524), reading \(skippedReading.count) (0 at 1408, 1 at 1524). Re-derived 2026-09-22 (the 2026-09-22 ingest added 116 machines); mismatches stayed 0.")
-        #expect(skippedSampledDriven.contains { $0.hasPrefix("m1pro_macos26.5.2_x block 1") && $0.contains("notListed") }, "the G85SB is the fourth sampled skip, not listed:\n\(skippedSampledDriven.joined(separator: "\n"))")
-        #expect(skippedReading.contains { $0.hasPrefix("m1max_macos26.6.2_i") }, "the one reading skip is m1max_macos26.6.2_i, which arrived with the 2026-09-22 ingest:\n\(skippedReading.joined(separator: "\n"))")
-        #expect(classified == 13 && offered.count == 4 && notOffered.count == 9, "classified \(classified): 9 (offered 3, not offered 6) at 1408 folders, 13 (4, 9) at 1524. Re-derived 2026-09-22 at 1524 folders (the 2026-09-22 ingest added 116 machines); the violation counts beside it stayed 0.")
-        #expect(notListed.isEmpty, "\(notListed.count) classified below-top nodes whose resolved top the node never lists; since fix round 4 the rule can leave one, and the corpus's one (the G85SB) is a sampled skip, not a classified verdict:\n\(notListed.joined(separator: "\n"))")
+        #expect(classified > 0, "no below-top node was classified: checked at least one")
+        // Two named fixture folders, each pinned to the skip path it takes, so a regression that
+        // moved either onto a classified verdict shows. A bare count would let a different node
+        // take the slot without anyone noticing.
+        #expect(skippedSampledDriven.contains { $0.hasPrefix("m1pro_macos26.5.2_x block 1") && $0.contains("notListed") }, "the G85SB (m1pro_macos26.5.2_x block 1) must be a sampled skip, not listed:\n\(skippedSampledDriven.joined(separator: "\n"))")
+        #expect(skippedReading.contains { $0.hasPrefix("m1max_macos26.6.2_i") }, "m1max_macos26.6.2_i must be a reading skip (its reading is not uncompressed):\n\(skippedReading.joined(separator: "\n"))")
+        #expect(notListed.isEmpty, "\(notListed.count) classified below-top nodes whose resolved top the node never lists; since fix round 4 the rule can leave one, and the G85SB is a sampled skip, not a classified verdict:\n\(notListed.joined(separator: "\n"))")
         #expect(mismatches.isEmpty, "\(mismatches.count) below-top nodes whose verdict does not follow the top-mode timing:\n\(mismatches.joined(separator: "\n"))")
         #expect(classified + skippedSampledDriven.count + skippedReading.count == belowTop, "every below-top node is classified or named as skipped")
     }

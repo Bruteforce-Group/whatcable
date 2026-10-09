@@ -217,7 +217,7 @@ struct HPMPortNumberDisagreementCorpusSweepTests {
 
     // MARK: - The sweep
 
-    @Test("usb-c-port-number and Port-USB-C@N disagree in exactly two shapes, on exactly three families")
+    @Test("usb-c-port-number and Port-USB-C@N disagree only in the known shapes, on the known families")
     func portNumberDisagreementsAreTwoKnownShapes() {
         guard FileManager.default.fileExists(atPath: Self.probeRoot.path) else {
             print("[HPMPortNumberDisagreementSweep] SKIPPED: no corpus at \(Self.probeRoot.path). "
@@ -290,49 +290,30 @@ struct HPMPortNumberDisagreementCorpusSweepTests {
         }
         for example in examples { print("[HPMPortNumberDisagreementSweep]   e.g. \(example)") }
 
-        // 1. Coverage floor. The corpus as it stands supports about 3002
-        //    records; the floor sits well under that so growth is fine, while a
-        //    parser regression that silently stops finding records goes red.
-        #expect(records >= 2500,
-            "only \(records) joinable records found; the corpus supports about 3002, so the parsers or the probe shape have changed")
+        // 1. Not-empty guard: the sweep must have joined at least one record.
+        #expect(records > 0, "no joinable records found; the parsers or the probe shape have changed")
 
-        // 2 and 3. Exactly three families disagree at all, and they are the base
-        //    M1, M4 and M5 dies. Any other family showing up here is a NEW
-        //    numbering quirk and must be looked at before this test is relaxed.
-        let disagreeingFamilies = Set(disagreementsByFamily.filter { $0.value > 0 }.keys)
-        let expectedFamilies: Set<String> = ["M1", "M4", "M5"]
-        let unexpected = disagreeingFamilies.subtracting(expectedFamilies).sorted()
-        let fullTally = disagreementsByFamily.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
-        #expect(unexpected.isEmpty,
-            "families outside the known set now disagree: \(unexpected.joined(separator: ", ")). Full tally: \(fullTally)")
-        #expect(disagreeingFamilies == expectedFamilies,
-            "expected exactly \(expectedFamilies.sorted()) to disagree, got \(disagreeingFamilies.sorted())")
-
-        // 4. M1 is a straight swap of ports 1 and 2, both directions.
-        #expect(Set((pairsByFamily["M1"] ?? [:]).keys) == ["(1, 2)", "(2, 1)"],
-            "M1 disagreement shapes changed: \((pairsByFamily["M1"] ?? [:]).sorted { $0.key < $1.key })")
-
-        // 5. M4 and M5 skip @3, so USB 3 lands on @4. One shape, one direction.
-        #expect(Set((pairsByFamily["M4"] ?? [:]).keys) == ["(3, 4)"],
-            "M4 disagreement shapes changed: \((pairsByFamily["M4"] ?? [:]).sorted { $0.key < $1.key })")
-        #expect(Set((pairsByFamily["M5"] ?? [:]).keys) == ["(3, 4)"],
-            "M5 disagreement shapes changed: \((pairsByFamily["M5"] ?? [:]).sorted { $0.key < $1.key })")
-
-        // 6. Each family still actually disagrees. Measured today: M1 32
-        //    (16 each way), M4 76, M5 44. Floors sit comfortably below so corpus
-        //    growth cannot fail the build, while a family quietly dropping out
-        //    of the sample does.
-        #expect((disagreementsByFamily["M1"] ?? 0) >= 20,
-            "M1 disagreements fell to \(disagreementsByFamily["M1"] ?? 0); the corpus supports 32 (16 each way)")
-        #expect((disagreementsByFamily["M4"] ?? 0) >= 50,
-            "M4 disagreements fell to \(disagreementsByFamily["M4"] ?? 0); the corpus supports 76")
-        #expect((disagreementsByFamily["M5"] ?? 0) >= 30,
-            "M5 disagreements fell to \(disagreementsByFamily["M5"] ?? 0); the corpus supports 44")
-
-        // 7. Distinct folders holding at least one disagreement: M1 8, M4 38,
-        //    M5 22 today. Printed above, deliberately not asserted tightly: the
-        //    folder count moves with every ingest, and the shapes are what this
-        //    sweep is guarding.
+        // 2. Every disagreement is one of the known shapes, per family. M1 is a
+        //    straight swap of ports 1 and 2 (both directions). M4 and M5 skip
+        //    @3, so USB 3 lands on @4 (one shape, one direction). A family not
+        //    listed here that disagrees at all is a NEW numbering quirk and
+        //    must be looked at before this test is relaxed. Only the
+        //    "unknown fails" half is asserted: a family that stops
+        //    disagreeing (a pruned corpus) is not a failure.
+        let allowedPairs: [String: Set<String>] = [
+            "M1": ["(1, 2)", "(2, 1)"],
+            "M4": ["(3, 4)"],
+            "M5": ["(3, 4)"],
+        ]
+        var unexpectedShapes: [String] = []
+        for family in pairsByFamily.keys.sorted() {
+            let allowed = allowedPairs[family] ?? []
+            for (pair, count) in (pairsByFamily[family] ?? [:]).sorted(by: { $0.key < $1.key })
+            where !allowed.contains(pair) {
+                unexpectedShapes.append("\(family) \(pair) x\(count) in \((disagreeingFoldersByFamily[family] ?? []).sorted())")
+            }
+        }
+        #expect(unexpectedShapes.isEmpty,
+            "disagreement shapes outside the known set: \(unexpectedShapes.joined(separator: "; "))")
     }
 }

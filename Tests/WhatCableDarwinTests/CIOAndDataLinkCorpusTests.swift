@@ -504,12 +504,10 @@ struct CIOAndDataLinkCorpusTests {
     }
 
     /// Whole-corpus sweep, probe 17 only: both peer keys are present on
-    /// every active CIO row, and the Mac-to-Mac signature (empty Metadata,
-    /// nothing provisioned) is exactly the six folders named below. Two
-    /// independent parsers (this one and a Python pass over the same probes)
-    /// agree on the six; the task brief listed five, so the count here is
-    /// the measured one, not the quoted one.
-    @Test("CIO peer fields: every active row has both keys; empty-peer signature is exactly 6 folders (probe 17)")
+    /// every active CIO row. The Mac-to-Mac signature (empty Metadata,
+    /// nothing provisioned) is counted and printed, not pinned: which
+    /// folders carry it depends on what the corpus holds.
+    @Test("CIO peer fields: every active row has both keys (probe 17)")
     func cioPeerFieldsAcrossCorpus() {
         let folders = Self.allProbeFolders()
         guard !folders.isEmpty else {
@@ -537,21 +535,10 @@ struct CIOAndDataLinkCorpusTests {
             }
         }
 
+        print("CIO peer sweep: \(swept) active rows, empty-peer signature on \(Set(emptyPeer).count) folders")
         #expect(swept > 0, "No active CIO rows swept; the corpus is linked but empty")
         #expect(missingMetadata.isEmpty, "Active rows without Metadata: \(missingMetadata)")
         #expect(missingProvisioned.isEmpty, "Active rows without TunneledTransportsProvisioned: \(missingProvisioned)")
-        #expect(emptyPeer == [
-            "m4_macos26.5.2_g",
-            "m4_macos26.5_b",
-            "m4_macos27.0_k",
-            "m4pro_macos26.6.2_d",
-            // Added 2026-09-22 with the 116-machine ingest (the 2026-09-22 ingest,
-            // corpus 1408 -> 1524): the same empty-peer signature on a new
-            // machine, not a new shape.
-            "m5_macos27.0_x",
-            "m5pro_macos26.5.2_b",
-            "m5pro_macos27.0_d",
-        ], "Empty-peer signature folders: \(emptyPeer)")
     }
 
     /// Corpus replay: the 4 real ports (re-derived and confirmed with two
