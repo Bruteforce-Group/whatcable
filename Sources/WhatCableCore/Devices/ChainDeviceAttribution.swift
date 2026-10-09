@@ -11,9 +11,10 @@ import Foundation
 /// chained behind, which is where "12 rows, and you cannot tell what is plugged
 /// into what" comes from.
 ///
-/// No published technique exists for this on macOS, and `system_profiler
-/// SPUSBDataType` returns nothing at all on the reference machine, so there is
-/// no ground truth to copy. What follows is inference, and every step of it is
+/// No published technique exists for this on macOS. Apple's own USB report
+/// (`system_profiler SPUSBHostDataType`) shows each USB controller's hub tree
+/// but never which Thunderbolt box a hub is inside, so there is no ground truth
+/// to copy. What follows is inference, and every step of it is
 /// built to fail closed: **when the evidence does not single out one chain
 /// device, the device stays unattributed and renders exactly where it does
 /// today.** A wrong parent is worse than a flat list.
