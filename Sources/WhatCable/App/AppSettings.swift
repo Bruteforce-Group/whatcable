@@ -174,16 +174,67 @@ final class AppSettings: ObservableObject {
         )
     }
 
+    /// The saved language code, or empty for the system language. Static and
+    /// free of `shared` so `WhatCableApp.init` can read it before plugin
+    /// bootstrap, without running `AppSettings.init` (which also seeds the
+    /// USB probe gate, and that ordering is deliberate).
+    nonisolated static func savedLanguage(in defaults: UserDefaults) -> String {
+        defaults.string(forKey: Keys.preferredLanguage) ?? ""
+    }
+
+    /// Points every string bundle (Core, app, notifications) at `identifier`,
+    /// or back at the system language for an empty string.
+    nonisolated static func applyLocale(_ identifier: String) {
+        setCoreLocale(identifier)
+        setAppLocale(identifier)
+        setNotificationsLocale(identifier)
+    }
+
+    /// What to do with the app's own `AppleLanguages` entry. That entry is
+    /// what Apple's frameworks read for their strings (Services, Hide, Quit,
+    /// the Edit and Window menus, window titles), and they read it once per
+    /// launch, so a write takes effect on the next launch.
+    enum AppleLanguagesUpdate: Equatable {
+        case set([String])
+        case remove
+        case leave
+    }
+
+    /// A chosen language is written every launch, so a user who picked one
+    /// before this existed gets it without re-picking. An empty setting
+    /// removes the entry only when the user just chose "System default": at
+    /// launch it is left alone, because macOS's own per-app language setting
+    /// (System Settings > General > Language & Region > Applications) writes
+    /// the same key and must not be wiped. A code the app does not ship (a
+    /// stale or corrupt saved value) is treated like an empty setting, so it
+    /// is never written back over the user's real macOS choice.
+    nonisolated static func appleLanguagesUpdate(preferred: String, userChanged: Bool) -> AppleLanguagesUpdate {
+        let shipped = AppLanguages.available.contains {
+            $0.id.caseInsensitiveCompare(preferred) == .orderedSame
+        }
+        if shipped { return .set([preferred]) }
+        return userChanged ? .remove : .leave
+    }
+
+    nonisolated static func syncAppleLanguages(_ preferred: String, userChanged: Bool, in defaults: UserDefaults) {
+        switch appleLanguagesUpdate(preferred: preferred, userChanged: userChanged) {
+        case .set(let languages): defaults.set(languages, forKey: "AppleLanguages")
+        case .remove: defaults.removeObject(forKey: "AppleLanguages")
+        case .leave: break
+        }
+    }
+
     /// BCP 47 language code to override the system language, or empty string
-    /// for system default. Written to `AppleLanguages` so Foundation's bundle
-    /// lookup picks it up on the next launch.
+    /// for system default. WhatCable's own strings switch at once (the locale
+    /// bundles); the menus, which are built once at launch, and Apple-supplied
+    /// strings, which follow the app's `AppleLanguages` entry, switch on the
+    /// next launch.
     @Published var preferredLanguage: String {
         didSet {
             guard preferredLanguage != oldValue else { return }
             defaults.set(preferredLanguage, forKey: Keys.preferredLanguage)
-            setCoreLocale(preferredLanguage)
-            setAppLocale(preferredLanguage)
-            setNotificationsLocale(preferredLanguage)
+            Self.applyLocale(preferredLanguage)
+            Self.syncAppleLanguages(preferredLanguage, userChanged: true, in: defaults)
         }
     }
 
@@ -370,11 +421,9 @@ final class AppSettings: ObservableObject {
             hasCompletedOnboarding: defaults.bool(forKey: Keys.hasCompletedOnboarding),
             skipDeepUSBProbing: skipProbing
         )
-        let savedLanguage = defaults.string(forKey: Keys.preferredLanguage) ?? ""
+        let savedLanguage = Self.savedLanguage(in: defaults)
         self.preferredLanguage = savedLanguage
-        setCoreLocale(savedLanguage)
-        setAppLocale(savedLanguage)
-        setNotificationsLocale(savedLanguage)
+        Self.applyLocale(savedLanguage)
         let stored = defaults.double(forKey: Keys.fontSize)
         let raw = stored > 0 ? stored : 1.0
         let initialScale = min(max(raw, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)

@@ -19,7 +19,25 @@ struct WhatCableApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     init() {
-        bootstrapPlugins(registry: .shared)
+        Self.startUp(
+            defaults: .standard,
+            applyLanguage: { code in
+                AppSettings.applyLocale(code)
+                AppSettings.syncAppleLanguages(code, userChanged: false, in: .standard)
+            },
+            bootstrap: { bootstrapPlugins(registry: .shared) }
+        )
+    }
+
+    /// Applies the saved language before anything builds a localised string.
+    /// `bootstrapPlugins` builds the plugin menu titles and the `.commands`
+    /// block builds the rest, both before `applicationDidFinishLaunching`
+    /// first touches `AppSettings.shared`, so without this they resolve
+    /// against the system language whatever the user picked.
+    @MainActor
+    static func startUp(defaults: UserDefaults, applyLanguage: (String) -> Void, bootstrap: () -> Void) {
+        applyLanguage(AppSettings.savedLanguage(in: defaults))
+        bootstrap()
     }
 
     var body: some Scene {
