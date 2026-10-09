@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "Цей Mac, схоже, не відкриває служби контролера портів. Натисніть «Оновити» або перевірте «Системна інформація > USB».";
 "Thunderbolt fabric" = "Thunderbolt fabric";
 "Transports" = "Транспорти";
-"USB active" = "USB активний";
 "Unknown" = "Невідомо";
 "Verifying signature…" = "Перевірка підпису…";
 "View release" = "Переглянути випуск";

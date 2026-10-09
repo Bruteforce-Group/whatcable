@@ -372,10 +372,12 @@ public struct AppleHPMInterface: Identifiable, Hashable {
     }
 
     private var carriesUSB: Bool {
-        if usbActive == true || superSpeedActive == true {
-            return true
-        }
-        return transportsActive.contains { transport in
+        // Live transports only. IOAccessoryUSBActive is true on every port,
+        // empty ones included, and IOAccessoryUSBSuperSpeedActive tracks USB3
+        // in TransportsProvisioned (set up, not running): it reads true on a
+        // USB 2 link such as a USB 2 mouse on a USB-A to USB-C adapter.
+        // Neither says whether this port is carrying USB right now.
+        transportsActive.contains { transport in
             transport == "USB2" || transport == "USB3" || transport == "USB4" || transport == "CIO"
         }
     }

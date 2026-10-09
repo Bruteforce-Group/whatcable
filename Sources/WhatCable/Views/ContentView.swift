@@ -1547,7 +1547,12 @@ struct PortCard: View {
                     cableEmarker: cableEmarker,
                     thunderboltRoot: thunderboltRoot,
                     thunderboltTree: thunderboltTree,
-                    thunderboltSwitches: thunderboltSwitches
+                    thunderboltSwitches: thunderboltSwitches,
+                    superSpeedLive: USB3SpeedCorroboration.hasLiveSuperSpeed(
+                        port: port,
+                        usb3Transports: usb3Transports,
+                        devices: devices
+                    )
                 )
             }
         }
@@ -1849,6 +1854,11 @@ struct AdvancedPortDetails: View {
     /// to resolve `ActiveTunnelPresentation`'s tunnel terminal switches, which
     /// can sit anywhere in the fabric, not just on the direct root-to-leaf path.
     let thunderboltSwitches: [IOThunderboltSwitch]
+    /// A live, corroborated USB 3 link on this port
+    /// (`USB3SpeedCorroboration.hasLiveSuperSpeed`). Apple's
+    /// IOAccessoryUSBSuperSpeedActive is not used: it means USB 3 was set
+    /// up, and reads true on USB 2 links.
+    let superSpeedLive: Bool
     @Environment(\.fontScale) private var fontScale
 
     var body: some View {
@@ -1857,8 +1867,7 @@ struct AdvancedPortDetails: View {
                 row(String(localized: "Active", bundle: _appLocalizedBundle), bool(port.connectionActive))
                 row(String(localized: "Active cable electronics", bundle: _appLocalizedBundle), bool(port.activeCable))
                 row(String(localized: "Optical", bundle: _appLocalizedBundle), bool(port.opticalCable))
-                row(String(localized: "USB active", bundle: _appLocalizedBundle), bool(port.usbActive))
-                row(String(localized: "SuperSpeed", bundle: _appLocalizedBundle), bool(port.superSpeedActive))
+                row(String(localized: "SuperSpeed", bundle: _appLocalizedBundle), bool(superSpeedLive))
                 row(String(localized: "Plug events", bundle: _appLocalizedBundle), port.plugEventCount.map(String.init) ?? "—")
             }
             group(String(localized: "Transports", bundle: _appLocalizedBundle)) {

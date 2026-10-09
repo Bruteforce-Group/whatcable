@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "Bu Mac, bağlantı noktası denetleyici hizmetlerini göstermiyor gibi görünüyor. Yenile'ye basın veya Sistem Bilgileri > USB bölümünü kontrol edin.";
 "Thunderbolt fabric" = "Thunderbolt fabric";
 "Transports" = "Aktarımlar";
-"USB active" = "USB etkin";
 "Unknown" = "Bilinmiyor";
 "Verifying signature…" = "İmza doğrulanıyor…";
 "View release" = "Sürümü görüntüle";

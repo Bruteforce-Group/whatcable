@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "Похоже, этот Mac не отдаёт службы контроллера портов. Нажмите «Обновить» или откройте «Об этом Mac» → «Отчёт о системе» → USB.";
 "Thunderbolt fabric" = "Сеть Thunderbolt";
 "Transports" = "Транспорты";
-"USB active" = "USB активен";
 "Unknown" = "Неизвестно";
 "Verifying signature…" = "Проверка подписи…";
 "View release" = "Открыть релиз";

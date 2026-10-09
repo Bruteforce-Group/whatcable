@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "Deze Mac lijkt geen poortcontrollerdiensten beschikbaar te stellen. Vernieuw, of controleer Systeeminformatie > USB.";
 "Thunderbolt fabric" = "Thunderbolt fabric";
 "Transports" = "Transporten";
-"USB active" = "USB actief";
 "Unknown" = "Onbekend";
 "Verifying signature…" = "Handtekening verifiëren…";
 "View release" = "Release bekijken";

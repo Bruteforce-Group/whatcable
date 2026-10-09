@@ -70,7 +70,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "这台 Mac 似乎没有暴露端口控制器服务。请点按刷新，或检查「系统信息」>「USB」。";
 "Thunderbolt fabric" = "Thunderbolt 拓扑";
 "Transports" = "传输";
-"USB active" = "USB 活跃";
 "Unknown" = "未知";
 "Verifying signature…" = "正在验证签名…";
 "View release" = "查看发布页";

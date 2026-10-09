@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "이 Mac은 포트 컨트롤러 서비스를 노출하지 않는 것 같아요. 새로 고침을 누르거나 시스템 정보 > USB를 확인해 보세요.";
 "Thunderbolt fabric" = "Thunderbolt 패브릭";
 "Transports" = "전송 방식";
-"USB active" = "USB 연결 활성";
 "Unknown" = "알 수 없음";
 "Verifying signature…" = "서명 확인 중…";
 "View release" = "릴리스 보기";

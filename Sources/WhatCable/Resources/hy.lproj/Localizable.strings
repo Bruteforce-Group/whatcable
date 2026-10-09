@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "Այս Mac-ը կարծես թե չի տրամադրում պորտերի վերահսկման ծառայությունները: Սեղմեք թարմացնել կամ ստուգեք System Information > USB բաժինը:";
 "Thunderbolt fabric" = "Thunderbolt կառուցվածք";
 "Transports" = "Տվյալների փոխանցում";
-"USB active" = "USB-ն ակտիվ է";
 "Unknown" = "Անհայտ";
 "Verifying signature…" = "Ստուգվում է թվային ստորագրությունը…";
 "View release" = "Տեսնել թողարկումը";

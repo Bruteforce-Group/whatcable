@@ -69,7 +69,6 @@
 "This Mac doesn't seem to expose its port-controller services. Hit refresh, or check System Information > USB." = "Este Mac parece não expor os serviços do controlador de portas. Atualize ou confira Informações do Sistema > USB.";
 "Thunderbolt fabric" = "Malha Thunderbolt";
 "Transports" = "Transportes";
-"USB active" = "USB ativo";
 "Unknown" = "Desconhecido";
 "Verifying signature…" = "Verificando assinatura…";
 "View release" = "Ver versão";

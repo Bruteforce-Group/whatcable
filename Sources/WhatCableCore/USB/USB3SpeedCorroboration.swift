@@ -125,6 +125,30 @@ public enum USB3SpeedCorroboration {
         return selected?.transportRestricted == true
     }
 
+    /// Whether this port has a live, corroborated USB 3 link: USB3 in
+    /// `TransportsActive` AND `isCorroborated` for the selected direct
+    /// transport. The same test `PortSummary` applies before it prints a
+    /// USB 3 speed line (`hasCorroboratedUSB3`).
+    ///
+    /// Deliberately ignores `IOAccessoryUSBSuperSpeedActive`. That flag
+    /// tracks USB3 in `TransportsProvisioned` (set up, not running) and
+    /// reads true on USB 2 links: a USB 2 mouse on a USB-A to USB-C
+    /// adapter, or a USB 3 drive on a USB 2-only cable.
+    ///
+    /// `devices` is the PORT-SCOPED list (`matchingDevices`), as for
+    /// `isCorroborated`.
+    public static func hasLiveSuperSpeed(
+        port: AppleHPMInterface,
+        usb3Transports: [USB3Transport],
+        devices: [USBDevice]
+    ) -> Bool {
+        guard port.transportsActive.contains("USB3") else { return false }
+        return isCorroborated(
+            selected: selectedTransport(for: port, in: usb3Transports),
+            devices: devices
+        )
+    }
+
     /// Any natively-attached SuperSpeed device on this port, including one
     /// sitting behind a hub.
     ///

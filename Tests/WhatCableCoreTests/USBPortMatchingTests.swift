@@ -90,6 +90,24 @@ struct USBPortMatchingTests {
         #expect(port.matchingDevices(from: [device]) == [device])
     }
 
+    @Test("bus fallback ignores the always-on USB flags")
+    func busFallbackIgnoresAlwaysOnUSBFlags() {
+        // IOAccessoryUSBActive is true on every port, empty ones included,
+        // and IOAccessoryUSBSuperSpeedActive tracks USB3 in
+        // TransportsProvisioned (set up, not running). Neither may open the
+        // bus-index fallback on a port whose only live transport is CC.
+        let port = makePort(
+            serviceName: "Port-USB-C@1",
+            busIndex: 1,
+            usbActive: true,
+            superSpeedActive: true,
+            transportsActive: ["CC"]
+        )
+        let device = makeDevice(id: 1, busIndex: 1)
+
+        #expect(port.matchingDevices(from: [device]) == [])
+    }
+
     // MARK: - Built-in USB-only front ports (issue #456)
 
     @Test("behind-internal-hub device attaches to its port on an exact name match")
@@ -175,6 +193,7 @@ struct USBPortMatchingTests {
         portTypeDescription: String = "USB-C",
         busIndex: Int? = nil,
         usbActive: Bool? = true,
+        superSpeedActive: Bool? = nil,
         transportsActive: [String] = ["USB2"],
         rawProperties: [String: String] = ["PortType": "2"]
     ) -> USBCPort {
@@ -189,7 +208,7 @@ struct USBPortMatchingTests {
             activeCable: nil,
             opticalCable: nil,
             usbActive: usbActive,
-            superSpeedActive: nil,
+            superSpeedActive: superSpeedActive,
             usbModeType: nil,
             usbConnectString: nil,
             transportsSupported: ["USB2", "USB3"],
