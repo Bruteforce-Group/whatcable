@@ -91,6 +91,7 @@ public struct CableSnapshotContext {
     public let adapter: AdapterInfo?
     public let batteryFullyCharged: Bool?
     public let batteryIsCharging: Bool?
+    public let batteryChargeState: BatteryChargeState?
     public let federatedIdentities: [FederatedIdentity]
     public let thunderboltSwitches: [IOThunderboltSwitch]
     public let isDesktopMac: Bool
@@ -158,6 +159,7 @@ public struct CableSnapshotContext {
         self.adapter = snapshot.adapter
         self.batteryFullyCharged = snapshot.batteryFullyCharged
         self.batteryIsCharging = snapshot.batteryIsCharging
+        self.batteryChargeState = snapshot.batteryChargeState
         self.federatedIdentities = snapshot.federatedIdentities
         self.thunderboltSwitches = snapshot.thunderboltSwitches
         self.isDesktopMac = snapshot.isDesktopMac

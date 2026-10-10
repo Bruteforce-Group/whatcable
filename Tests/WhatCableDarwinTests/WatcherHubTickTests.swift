@@ -48,6 +48,17 @@ extension HubReading {
             phy: nil, display: [], uvdm: []
         )
     }
+
+    static func with(chargeState: BatteryChargeState?) -> HubReading {
+        HubReading(
+            ports: .init(ports: [], liveEntryIDs: []),
+            pd: .init(identities: [], stateCCEntryIDs: []),
+            power: .init(sources: [], charger: nil, chargeState: chargeState),
+            thunderbolt: .init(switches: [], liveEntryIDs: [], modelEntryIDs: []),
+            usb3: [], trm: .init(transports: [], cioCapabilities: []),
+            phy: nil, display: [], uvdm: []
+        )
+    }
 }
 
 /// Waits until `didRefresh` has fired `n` times, or `timeout` passes.
@@ -85,6 +96,26 @@ func transport(_ id: UInt64) -> USB3Transport {
         #expect(await waitForTicks(hub, 1))
         #expect(fake.calls == 1)
         #expect(fake.ranOnMain == [false])
+    }
+
+    @Test func hubFeedsTheChargeStateOnEachRead() async {
+        let fake = FakeRead(reading: .with(chargeState: .chargeLimitReached))
+        let hub = WatcherHub(read: { fake.read($0, $1) })
+        hub.refreshAll()
+        #expect(await waitForTicks(hub, 1))
+        #expect(hub.powerWatcher.batteryChargeState == .chargeLimitReached)
+    }
+
+    /// The plug-in burst reads 150 ms and 500 ms after a change; two quick
+    /// reads inside one CH0R pulse must not publish running on battery.
+    @Test func quickRunningOnBatteryReadsDoNotPublish() async {
+        let fake = FakeRead(reading: .with(chargeState: .runningOnBattery))
+        let hub = WatcherHub(read: { fake.read($0, $1) })
+        hub.refreshAll()
+        #expect(await waitForTicks(hub, 1))
+        hub.refreshAll()
+        #expect(await waitForTicks(hub, 1))
+        #expect(hub.powerWatcher.batteryChargeState == nil)
     }
 
     @Test func steadyTickIsSkippedWhileAReadRuns() async {

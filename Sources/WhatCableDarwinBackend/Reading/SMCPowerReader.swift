@@ -164,6 +164,15 @@ public final class SMCPowerReader: @unchecked Sendable {
         return Int((Double(watts) * 1000).rounded())
     }
 
+    /// Reads the SMC keys the charge-state chain uses (`BatteryChargeState.decide`).
+    /// Opens lazily. Returns nil only when the SMC can't be opened; a key this
+    /// Mac doesn't have comes back as a nil field, which the chain handles.
+    public func readBatteryChargeInputs() -> BatteryChargeInputs? {
+        lock.lock(); defer { lock.unlock() }
+        guard open() else { return nil }
+        return Self.batteryChargeInputs(read: { self.readKey($0) })
+    }
+
     // MARK: - Key reads
 
     /// `flt` keys (`DxJV`, `DxJI`): a 4-byte IEEE float in native (little-
@@ -208,6 +217,43 @@ public final class SMCPowerReader: @unchecked Sendable {
         return Self.decodeBigEndianInt(bytes)
     }
 
+    /// The keys `BatteryChargeState.decide` reads, as named in the Asahi driver.
+    static let batteryChargeKeys = ["CH0R", "CHCE", "CHCC", "AC-i", "BSFC", "CHLS", "CHWA", "BUIC", "CHNC", "CHSC"]
+
+    /// Builds the chain's inputs from raw key bytes. Pure, so the corpus sweep
+    /// runs it on probe 34's captured bytes. Values are decoded little-endian
+    /// at the width the SMC returns (CHCE and CHCC are `ui8` on most Macs and
+    /// `flag` on some), with one exception: CHNC is used only when it is 8
+    /// bytes, because Asahi reads it with `apple_smc_read_u64`. Any other width
+    /// (1 byte on some Macs) counts as unreadable, so CHSC decides.
+    static func batteryChargeInputs(read: (String) -> [UInt8]?) -> BatteryChargeInputs {
+        var v: [String: UInt64] = [:]
+        for key in batteryChargeKeys {
+            guard let bytes = read(key) else { continue }
+            if key == "CHNC" && bytes.count != 8 { continue }
+            if let value = decodeLittleEndianUInt(bytes) { v[key] = value }
+        }
+        return BatteryChargeInputs(
+            ch0r: v["CH0R"].map { UInt32(truncatingIfNeeded: $0) },
+            chce: v["CHCE"].map { $0 != 0 },
+            chcc: v["CHCC"].map { $0 != 0 },
+            acInputLimit: v["AC-i"].map { UInt16(truncatingIfNeeded: $0) },
+            bsfc: v["BSFC"].map { $0 != 0 },
+            chls: v["CHLS"].map { UInt16(truncatingIfNeeded: $0) },
+            chwa: v["CHWA"].map { $0 != 0 },
+            buic: v["BUIC"].map { UInt8(truncatingIfNeeded: $0) },
+            chnc: v["CHNC"],
+            chsc: v["CHSC"].map { $0 != 0 }
+        )
+    }
+
+    /// Integer keys of the charge chain: LITTLE-endian (native on Apple
+    /// Silicon), unlike `decodeBigEndianInt` above. `B0AC` raw `ea16` is 5866.
+    static func decodeLittleEndianUInt(_ bytes: [UInt8]) -> UInt64? {
+        guard !bytes.isEmpty, bytes.count <= 8 else { return nil }
+        return bytes.reversed().reduce(0) { ($0 << 8) | UInt64($1) }
+    }
+
     /// `ch8*` keys (`DxDE`): a fixed-width NUL-padded label.
     private func readString(_ key: String) -> String? {
         guard let bytes = readKey(key) else { return nil }
@@ -233,6 +279,10 @@ public final class SMCPowerReader: @unchecked Sendable {
 
     // MARK: - SMC ABI
 
+    /// The SMC reports its own errors in `result` (for example 0x84, key not
+    /// found) even when the IOKit call succeeds, so check both.
+    static func smcCallSucceeded(_ output: SMCParamStruct) -> Bool { output.result == 0 }
+
     /// Reads one SMC key's raw bytes: first ask for its size and type, then
     /// read the value (the same two-step the C probe uses).
     private func readKey(_ key: String) -> [UInt8]? {
@@ -242,6 +292,7 @@ public final class SMCPowerReader: @unchecked Sendable {
         info.key = fourCC
         info.data8 = Self.cmdGetKeyInfo
         guard let infoOut = callDriver(&info) else { return nil }
+        guard Self.smcCallSucceeded(infoOut) else { return nil }
         let size = infoOut.keyInfo.dataSize
         guard size > 0 else { return nil }
 
@@ -251,6 +302,7 @@ public final class SMCPowerReader: @unchecked Sendable {
         read.keyInfo.dataType = infoOut.keyInfo.dataType
         read.data8 = Self.cmdReadKey
         guard let readOut = callDriver(&read) else { return nil }
+        guard Self.smcCallSucceeded(readOut) else { return nil }
 
         let count = Int(min(size, 32))
         var value = readOut.bytes
@@ -295,7 +347,7 @@ public final class SMCPowerReader: @unchecked Sendable {
 // Field order and types must not change: the kernel reads this struct at fixed
 // offsets. `MemoryLayout<SMCParamStruct>.stride` must be 80 bytes.
 
-private struct SMCVersion {
+struct SMCVersion {
     var major: UInt8 = 0
     var minor: UInt8 = 0
     var build: UInt8 = 0
@@ -303,7 +355,7 @@ private struct SMCVersion {
     var release: UInt16 = 0
 }
 
-private struct SMCPLimitData {
+struct SMCPLimitData {
     var version: UInt16 = 0
     var length: UInt16 = 0
     var cpuPLimit: UInt32 = 0
@@ -311,21 +363,21 @@ private struct SMCPLimitData {
     var memPLimit: UInt32 = 0
 }
 
-private struct SMCKeyInfoData {
+struct SMCKeyInfoData {
     var dataSize: UInt32 = 0
     var dataType: UInt32 = 0
     var dataAttributes: UInt8 = 0
 }
 
 /// A 32-byte payload buffer as a homogeneous tuple (the C `char bytes[32]`).
-private typealias SMCBytes = (
+typealias SMCBytes = (
     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8
 )
 
-private struct SMCParamStruct {
+struct SMCParamStruct {
     var key: UInt32 = 0
     var vers = SMCVersion()
     var pLimit = SMCPLimitData()

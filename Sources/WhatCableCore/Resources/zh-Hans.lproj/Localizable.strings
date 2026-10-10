@@ -458,6 +458,10 @@
 
 "Plugged in, charging on hold" = "已插入，充电已暂停";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "充电器和数据线正常。macOS 目前已暂停充电，通常是因为电池充电限制或优化电池充电功能已启用。Mac 仍在从充电器获取电力。";
+"Plugged in, charge limit reached" = "已插入，已达到充电上限";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "充电器和数据线正常。电池已达到 macOS 设定的充电电量，因此已停止充电。Mac 仍在从充电器获取电力。";
+"Plugged in, running on battery" = "已插入，正在使用电池供电";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "充电器已连接，但 Mac 目前没有从充电器获取电力，因此正在使用电池供电。";
 "Plugged in · %lldW charger" = "已插入 · %lldW 充电器";
 "Plugged in" = "已插入";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "充电已暂停（充电限制或优化电池充电）";

@@ -457,6 +457,10 @@
 
 "Plugged in, charging on hold" = "Підключено, заряджання призупинено";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "Зарядний пристрій і кабель справні. macOS тимчасово призупинила заряджання, зазвичай через ліміт заряду батареї або оптимізоване заряджання. Mac продовжує отримувати живлення від зарядного пристрою.";
+"Plugged in, charge limit reached" = "Підключено, досягнуто ліміту заряду";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "Зарядний пристрій і кабель справні. Батарея досягла рівня, до якого її заряджає macOS, тому заряджання зупинено. Mac продовжує отримувати живлення від зарядного пристрою.";
+"Plugged in, running on battery" = "Підключено, працює від батареї";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "Зарядний пристрій підключено, але Mac зараз не отримує від нього живлення, тому працює від батареї.";
 "Plugged in · %lldW charger" = "Підключено · зарядний пристрій %lldW";
 "Plugged in" = "Підключено";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Заряджання призупинено (ліміт заряду або оптимізоване заряджання)";

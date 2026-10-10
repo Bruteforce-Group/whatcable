@@ -408,6 +408,7 @@ struct ContentView: View {
                 let federatedIdentities = batteryResult.federatedIdentities
                 let batteryFull = batteryResult.battery?.fullyCharged
                 let batteryCharging = batteryResult.battery?.isCharging
+                let batteryChargeState = powerWatcher.batteryChargeState
                 // Port keys with a live negotiated contract, so a connected-
                 // but-idle second charger can tell another port is the active
                 // source rather than being stuck mid-negotiation (#264).
@@ -454,6 +455,7 @@ struct ContentView: View {
                                 chargerWattageSource: wattageSource,
                                 batteryFullyCharged: batteryFull,
                                 batteryIsCharging: batteryCharging,
+                                batteryChargeState: batteryChargeState,
                                 adapter: adapter,
                                 anotherPortActivelyCharging: port.portKey.map { key in chargingPortKeys.contains { $0 != key } } ?? false,
                                 connectionDiagnostic: faultTracker.diagnostic(for: port.portKey),
@@ -1080,6 +1082,8 @@ struct PortCard: View {
     /// AppleSmartBattery's IsCharging flag. `nil` on desktops. `false` when
     /// macOS has paused charging (charge limit or Optimized Battery Charging).
     let batteryIsCharging: Bool?
+    /// Live SMC charge state (nil: use the two battery-record flags).
+    let batteryChargeState: BatteryChargeState?
     /// System-wide adapter info from `SystemPower.currentAdapter()`.
     /// Threaded through so the "Charger: <Manufacturer> <Name>" bullet
     /// can fire on the active charging port.
@@ -1142,6 +1146,7 @@ struct PortCard: View {
             chargerWattageSource: chargerWattageSource,
             batteryFullyCharged: batteryFullyCharged,
             batteryIsCharging: batteryIsCharging,
+            batteryChargeState: batteryChargeState,
             adapter: adapter,
             connectionAge: connectionAge
         )
@@ -1373,7 +1378,7 @@ struct PortCard: View {
                     .padding(.leading, 48)
             }
 
-            if let diag = ChargingDiagnostic(port: port, sources: powerSources, identities: identities, adapter: adapter, wattageSource: chargerWattageSource, batteryFullyCharged: batteryFullyCharged, batteryIsCharging: batteryIsCharging, anotherPortActivelyCharging: anotherPortActivelyCharging, federatedIdentities: federatedIdentities) {
+            if let diag = ChargingDiagnostic(port: port, sources: powerSources, identities: identities, adapter: adapter, wattageSource: chargerWattageSource, batteryFullyCharged: batteryFullyCharged, batteryIsCharging: batteryIsCharging, batteryChargeState: batteryChargeState, anotherPortActivelyCharging: anotherPortActivelyCharging, federatedIdentities: federatedIdentities) {
                 DiagnosticBanner(diagnostic: diag)
                     .padding(.leading, 48)
             }

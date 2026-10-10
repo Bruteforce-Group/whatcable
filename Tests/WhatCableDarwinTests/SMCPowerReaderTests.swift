@@ -46,6 +46,19 @@ struct SMCPowerReaderTests {
         #expect(SMCPowerReader.decodeFloat([0x00, 0x00, 0xA6]) == nil)
     }
 
+    @Test("A non-zero SMC result byte marks the key read as failed")
+    func smcResultByteGatesAKeyRead() {
+        // The SMC can return KERN_SUCCESS from IOConnectCallStructMethod and
+        // still put its own error code (0x84 = key not found) in `result`.
+        var ok = SMCParamStruct()
+        ok.result = 0
+        #expect(SMCPowerReader.smcCallSucceeded(ok))
+
+        var notFound = SMCParamStruct()
+        notFound.result = 0x84
+        #expect(!SMCPowerReader.smcCallSucceeded(notFound))
+    }
+
     @Test("Constructing the reader does not trip the 80-byte struct assertion")
     func structLayoutIsCorrect() {
         // The init() precondition fires (in debug) if SMCParamStruct ever stops
@@ -167,6 +180,47 @@ struct SMCPowerReaderTests {
         let supported = matchedChannels > 0
         #expect(supported,
             "perPortMeteringSupported must be true when at least one channel resolves")
+    }
+
+    @Test("Little-endian decode: B0AC raw ea16 is 5866")
+    func decodeLittleEndian() {
+        #expect(SMCPowerReader.decodeLittleEndianUInt([0xEA, 0x16]) == 5866)
+        #expect(SMCPowerReader.decodeLittleEndianUInt([0x80, 0, 0, 0, 0, 0, 0, 0]) == 0x80)
+        #expect(SMCPowerReader.decodeLittleEndianUInt([0, 0, 0, 0x01, 0, 0, 0, 0]) == 1 << 24)
+        #expect(SMCPowerReader.decodeLittleEndianUInt([]) == nil)
+        #expect(SMCPowerReader.decodeLittleEndianUInt(Array(repeating: 0, count: 9)) == nil)
+    }
+
+    @Test("Charge inputs: every key decoded little-endian at its own width; absent keys stay nil")
+    func batteryChargeInputsFromBytes() {
+        let raw: [String: [UInt8]] = [
+            "CH0R": [0x00, 0x01, 0x00, 0x00],                 // 0x100, BMS busy only
+            "CHCE": [0x01], "CHCC": [0x01], "BSFC": [0x00], "BUIC": [0x50],
+            "CHNC": [0x00, 0x00, 0x00, 0x01, 0, 0, 0, 0],     // bit 24
+            "CHSC": [0x00], "AC-i": [0xAB, 0x05],
+        ]
+        let k = SMCPowerReader.batteryChargeInputs(read: { raw[$0] })
+        #expect(k == BatteryChargeInputs(
+            ch0r: 0x100, chce: true, chcc: true, acInputLimit: 0x05AB, bsfc: false,
+            chls: nil, chwa: nil, buic: 80, chnc: 1 << 24, chsc: false))
+        #expect(BatteryChargeState.decide(k) == .chargeLimitReached)
+    }
+
+    @Test("A 1-byte CHNC is unreadable, as in Asahi's u64 read, so CHSC decides")
+    func oneByteCHNCFallsThroughToCHSC() {
+        let base: [String: [UInt8]] = ["CHCE": [0x01], "CHCC": [0x01], "BSFC": [0x00], "CHNC": [0x80]]
+        func inputs(_ extra: [String: [UInt8]]) -> BatteryChargeInputs {
+            let raw = base.merging(extra) { $1 }
+            return SMCPowerReader.batteryChargeInputs(read: { raw[$0] })
+        }
+        let charging = inputs(["CHSC": [0x01]])
+        #expect(charging.chnc == nil)
+        #expect(BatteryChargeState.decide(charging) == .charging)
+        #expect(BatteryChargeState.decide(inputs(["CHSC": [0x00]])) == .onHold)
+        // The same bit at 8 bytes is used: bit 7 alone is on hold, whatever CHSC says.
+        let eight = inputs(["CHSC": [0x01], "CHNC": [0x80, 0, 0, 0, 0, 0, 0, 0]])
+        #expect(eight.chnc == 0x80)
+        #expect(BatteryChargeState.decide(eight) == .onHold)
     }
 }
 

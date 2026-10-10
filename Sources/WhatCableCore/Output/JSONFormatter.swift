@@ -11,6 +11,7 @@ public enum JSONFormatter {
         isDesktopMac: Bool = false,
         batteryFullyCharged: Bool? = nil,
         batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil,
         federatedIdentities: [FederatedIdentity] = [],
         usb3Transports: [USB3Transport] = [],
         trmTransports: [TRMTransport] = [],
@@ -40,7 +41,8 @@ public enum JSONFormatter {
             accessoryIdentities: accessoryIdentities,
             displayPorts: displayPorts,
             batteryFullyCharged: batteryFullyCharged,
-            batteryIsCharging: batteryIsCharging
+            batteryIsCharging: batteryIsCharging,
+            batteryChargeState: batteryChargeState
         ))
         // Map each switch's hardware UID to its position in the encoded
         // array. The JSON exposes only these per-snapshot indices; the raw
@@ -93,6 +95,7 @@ public enum JSONFormatter {
                     chargerWattageSource: portContext.chargerWattageSource,
                     batteryFullyCharged: context.batteryFullyCharged,
                     batteryIsCharging: context.batteryIsCharging,
+                    batteryChargeState: context.batteryChargeState,
                     usbDevices: portContext.matchedDevices,
                     structuralTunnelledDevices: portContext.structurallyScopedTunnelledDevices,
                     displayPorts: portContext.portDisplayPorts,
@@ -296,6 +299,7 @@ private struct PortDTO: Codable {
         chargerWattageSource: ChargerWattageSource = .unknown,
         batteryFullyCharged: Bool? = nil,
         batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil,
         usbDevices: [USBDevice] = [],
         // Tunnelled devices structurally scoped to this port by apciecN root
         // name. Joined into the per-port device tree below; kept OUT of the
@@ -331,6 +335,7 @@ private struct PortDTO: Codable {
             chargerWattageSource: chargerWattageSource,
             batteryFullyCharged: batteryFullyCharged,
             batteryIsCharging: batteryIsCharging,
+            batteryChargeState: batteryChargeState,
             adapter: adapter
         )
         self.status = String(describing: summary.status)
@@ -392,7 +397,7 @@ private struct PortDTO: Codable {
 
         self.device = partnerIdentity.map { DeviceDTO(identity: $0) }
 
-        self.charging = ChargingDiagnostic(port: port, sources: sources, identities: identities, adapter: adapter, wattageSource: chargerWattageSource, batteryFullyCharged: batteryFullyCharged, batteryIsCharging: batteryIsCharging, anotherPortActivelyCharging: anotherPortActivelyCharging, federatedIdentities: federatedIdentities)
+        self.charging = ChargingDiagnostic(port: port, sources: sources, identities: identities, adapter: adapter, wattageSource: chargerWattageSource, batteryFullyCharged: batteryFullyCharged, batteryIsCharging: batteryIsCharging, batteryChargeState: batteryChargeState, anotherPortActivelyCharging: anotherPortActivelyCharging, federatedIdentities: federatedIdentities)
             .map { ChargingDTO(diagnostic: $0) }
 
         let dataLinkDiag = DataLinkDiagnostic(

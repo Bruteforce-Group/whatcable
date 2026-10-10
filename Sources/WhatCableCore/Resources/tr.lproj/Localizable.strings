@@ -457,6 +457,10 @@
 
 "Plugged in, charging on hold" = "Bağlı, şarj beklemede";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "Şarj cihazı ve kablo sorunsuz. macOS şarjı şimdilik durdurdu; genellikle bir batarya şarj sınırı veya Optimize Edilmiş Batarya Şarjı nedeniyle olur. Mac, şarj cihazından güç almaya devam ediyor.";
+"Plugged in, charge limit reached" = "Bağlı, şarj sınırına ulaşıldı";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "Şarj cihazı ve kablo sorunsuz. Batarya, macOS'in şarj ettiği seviyeye ulaştı, bu yüzden şarj durdu. Mac, şarj cihazından güç almaya devam ediyor.";
+"Plugged in, running on battery" = "Bağlı, batarya ile çalışıyor";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "Şarj cihazı bağlı, ancak Mac şu anda ondan güç almıyor, bu yüzden bataryasıyla çalışıyor.";
 "Plugged in · %lldW charger" = "Bağlı · %lldW şarj cihazı";
 "Plugged in" = "Bağlı";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Şarj beklemede (şarj sınırı veya Optimize Edilmiş Batarya Şarjı)";

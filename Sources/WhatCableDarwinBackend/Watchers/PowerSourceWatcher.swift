@@ -81,6 +81,19 @@ public final class PowerSourceWatcher: ObservableObject {
         didSet { chargerGeneration &+= 1 }
     }
 
+    /// The battery's charge state from the live SMC chain, debounced:
+    /// `.runningOnBattery` is published only once every read has produced it
+    /// for `runningOnBatteryHold` seconds (CH0R pulses for up to about 1 s on
+    /// plug-in, and the hub's burst can read twice inside one pulse). nil means
+    /// "use the battery record": no SMC keys, a desktop, or nothing published
+    /// yet. Published, so the open popover redraws when it changes.
+    @Published public private(set) var batteryChargeState: BatteryChargeState?
+    /// Monotonic seconds at the first read of the current unbroken run of
+    /// running-on-battery reads; nil when the last read was anything else.
+    private var runningOnBatterySince: TimeInterval?
+    /// Monotonic clock for the debounce window. Injected by tests.
+    private let clock: () -> TimeInterval
+
     /// Bumped on every change to either charger figure, from any path (apply,
     /// the power-source notification, switching the readout off). The hub
     /// compares it before and after its background read, same as
@@ -129,8 +142,9 @@ public final class PowerSourceWatcher: ObservableObject {
     /// readout-off majority schedules nothing.
     private var powerSourceRunLoopSource: CFRunLoopSource?
 
-    public init(smcReader: SMCPowerReader? = nil) {
+    public init(smcReader: SMCPowerReader? = nil, clock: @escaping () -> TimeInterval = PowerSourceWatcher.monotonicNow) {
         self.smcReader = smcReader ?? SMCPowerReader()
+        self.clock = clock
     }
 
     public func start() {
@@ -174,6 +188,8 @@ public final class PowerSourceWatcher: ObservableObject {
         if let p = notifyPort { IONotificationPortDestroy(p); notifyPort = nil }
         stopPowerSourceNotification()
         sources.removeAll()
+        runningOnBatterySince = nil
+        if batteryChargeState != nil { batteryChargeState = nil }
     }
 
     // MARK: - Charger-in watts notification
@@ -225,19 +241,75 @@ public final class PowerSourceWatcher: ObservableObject {
     public struct Reading: Sendable, Equatable {
         public let sources: [PowerSource]
         public let charger: ChargerWatts?
+        /// The SMC chain's undebounced decision for this read; nil when it could
+        /// not decide. Applied through `applyChargeState(_:)`, never `apply(_:)`.
+        public let chargeState: BatteryChargeState?
 
-        public init(sources: [PowerSource], charger: ChargerWatts?) {
+        public init(sources: [PowerSource], charger: ChargerWatts?, chargeState: BatteryChargeState? = nil) {
             self.sources = sources
             self.charger = charger
+            self.chargeState = chargeState
         }
     }
 
     public func refresh() {
-        apply(Self.readSources(
+        let reading = Self.readSources(
             synthesis: synthesisContext?(),
             smcReader: smcReader,
             readCharger: readsChargerInputWatts
-        ))
+        )
+        apply(reading)
+        applyChargeState(reading.chargeState)
+    }
+
+    /// Feed one read's charge state through the debounce. Call exactly once per
+    /// hardware read.
+    public func applyChargeState(_ raw: BatteryChargeState?) {
+        let result = Self.debouncedChargeState(
+            raw: raw, now: clock(), runningSince: runningOnBatterySince, published: batteryChargeState)
+        runningOnBatterySince = result.runningSince
+        if result.published != batteryChargeState { batteryChargeState = result.published }
+    }
+
+    /// How long every read must have said running on battery before it is shown.
+    nonisolated static let runningOnBatteryHold: TimeInterval = 2.0
+
+    /// Monotonic seconds, the same clock `connectionAttachInstant` uses.
+    nonisolated public static func monotonicNow() -> TimeInterval {
+        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    }
+
+    /// The debounce rule, pure. Running on battery is published once the
+    /// unbroken run that produced it is `runningOnBatteryHold` old, measured
+    /// from its first read; until then the published state stays. Anything
+    /// else, nil included, is taken at once and ends the run.
+    nonisolated static func debouncedChargeState(
+        raw: BatteryChargeState?, now: TimeInterval, runningSince: TimeInterval?, published: BatteryChargeState?
+    ) -> (published: BatteryChargeState?, runningSince: TimeInterval?) {
+        guard raw == .runningOnBattery else { return (raw, nil) }
+        let since = runningSince ?? now
+        return (now - since >= runningOnBatteryHold ? raw : published, since)
+    }
+
+    /// The one-shot rule, for a process that reads once (the CLI's single
+    /// snapshot, the widget's live path): a first `.runningOnBattery` waits
+    /// `runningOnBatteryHold`, reads again, and uses the second read's result.
+    /// Any other first result is used at once, with no wait. Reader and sleeper
+    /// are injected so tests never sleep.
+    nonisolated public static func confirmedOneShotChargeState(
+        first: BatteryChargeState?,
+        readAgain: () -> BatteryChargeState?,
+        sleep: (TimeInterval) async -> Void
+    ) async -> BatteryChargeState? {
+        guard first == .runningOnBattery else { return first }
+        await sleep(runningOnBatteryHold)
+        return readAgain()
+    }
+
+    /// The live SMC chain. nil when the SMC can't be opened or a key the chain
+    /// needs is missing.
+    nonisolated public static func readChargeState(smcReader: SMCPowerReader) -> BatteryChargeState? {
+        smcReader.readBatteryChargeInputs().flatMap(BatteryChargeState.decide)
     }
 
     /// Publish a read. Assigns only on change, so subscribers see no churn.
@@ -284,7 +356,8 @@ public final class PowerSourceWatcher: ObservableObject {
         }
         return Reading(
             sources: rebuilt,
-            charger: readCharger ? readChargerWatts(smcReader: smcReader) : nil
+            charger: readCharger ? readChargerWatts(smcReader: smcReader) : nil,
+            chargeState: readChargeState(smcReader: smcReader)
         )
     }
 

@@ -458,6 +458,10 @@
 
 "Plugged in, charging on hold" = "Branché, charge en pause";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "Le chargeur et le câble sont en bon état. macOS a mis la charge en pause, généralement en raison d'une limite de charge ou de la Recharge optimisée de la batterie. Le Mac continue de s'alimenter via le chargeur.";
+"Plugged in, charge limit reached" = "Branché, limite de charge atteinte";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "Le chargeur et le câble sont en bon état. La batterie a atteint le niveau jusqu'auquel macOS la charge, la charge s'est donc arrêtée. Le Mac continue de s'alimenter via le chargeur.";
+"Plugged in, running on battery" = "Branché, fonctionne sur batterie";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "Le chargeur est branché, mais le Mac n'en tire pas d'énergie pour le moment, il fonctionne donc sur sa batterie.";
 "Plugged in · %lldW charger" = "Branché · chargeur %lldW";
 "Plugged in" = "Branché";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Charge en pause (limite de charge ou Recharge optimisée)";

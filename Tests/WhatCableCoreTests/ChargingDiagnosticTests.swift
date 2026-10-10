@@ -1181,4 +1181,55 @@ struct ChargingDiagnosticTests {
         )
         #expect(diag == nil)
     }
+
+    // MARK: - SMC charge state (wins over the lagging battery record)
+
+    private var mains: AdapterInfo { AdapterInfo(watts: 100, isCharging: nil, source: "AC") }
+
+    @Test("Charge limit reached has its own summary and detail, in both arms")
+    func chargeLimitReachedWording() {
+        for (maxW, winW) in [(96, 96), (100, 30)] {
+            let diag = ChargingDiagnostic(
+                port: port, sources: [usbPD(maxW: maxW, winningW: winW)], identities: [],
+                adapter: mains, batteryFullyCharged: false, batteryIsCharging: true,
+                batteryChargeState: .chargeLimitReached)
+            #expect(diag?.summary == "Plugged in, charge limit reached", "\(maxW)/\(winW)")
+            #expect(diag?.detail == "Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger.")
+            #expect(diag?.isWarning == false)
+        }
+    }
+
+    @Test("Running on battery has its own summary and detail, in both arms")
+    func runningOnBatteryWording() {
+        for (maxW, winW) in [(96, 96), (100, 30)] {
+            let diag = ChargingDiagnostic(
+                port: port, sources: [usbPD(maxW: maxW, winningW: winW)], identities: [],
+                adapter: mains, batteryFullyCharged: false, batteryIsCharging: true,
+                batteryChargeState: .runningOnBattery)
+            #expect(diag?.summary == "Plugged in, running on battery", "\(maxW)/\(winW)")
+            #expect(diag?.detail == "The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery.")
+        }
+    }
+
+    @Test("A decided charging or full state overrides a stale battery record")
+    func decidedStateOverridesRecord() {
+        let charging = ChargingDiagnostic(
+            port: port, sources: [usbPD(maxW: 96, winningW: 96)], identities: [cableIdentity(watts: 100)],
+            adapter: mains, batteryFullyCharged: false, batteryIsCharging: false, batteryChargeState: .charging)
+        #expect(charging?.summary == "Charging well · up to 96W")
+        let full = ChargingDiagnostic(
+            port: port, sources: [usbPD(maxW: 96, winningW: 96)], identities: [cableIdentity(watts: 100)],
+            adapter: mains, batteryFullyCharged: false, batteryIsCharging: true, batteryChargeState: .full)
+        #expect(full?.summary == "Battery full, not charging")
+    }
+
+    @Test("notPluggedIn and nil leave today's battery-record path untouched")
+    func notPluggedInPassesThrough() {
+        for state in [nil, BatteryChargeState.notPluggedIn] as [BatteryChargeState?] {
+            let diag = ChargingDiagnostic(
+                port: port, sources: [usbPD(maxW: 96, winningW: 96)], identities: [cableIdentity(watts: 100)],
+                adapter: mains, batteryFullyCharged: false, batteryIsCharging: false, batteryChargeState: state)
+            #expect(diag?.summary == "Plugged in, charging on hold")
+        }
+    }
 }

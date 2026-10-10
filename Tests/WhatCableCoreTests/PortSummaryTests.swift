@@ -3147,4 +3147,30 @@ struct PortSummaryTests {
             "a display is not a charger, got: \(summary.bullets)"
         )
     }
+
+    // MARK: - SMC charge state
+
+    @Test("Charge limit and running on battery keep the on-hold headline over a stale IsCharging true")
+    func smcNewStatesUseOnHoldHeadline() {
+        let port = makePort(connected: true, active: [], supported: ["USB2"])
+        for state in [BatteryChargeState.chargeLimitReached, .runningOnBattery] {
+            let summary = PortSummary(
+                port: port, sources: [usbPD(maxW: 96, winningW: 96)],
+                batteryFullyCharged: false, batteryIsCharging: true, batteryChargeState: state,
+                adapter: adapter())
+            #expect(summary.status == .charging)
+            #expect(summary.headline.hasPrefix("Plugged in"), "\(state): \(summary.headline)")
+            #expect(summary.headline.contains("96W"))
+        }
+    }
+
+    @Test("SMC charging overrides a stale IsCharging false")
+    func smcChargingOverridesStaleRecord() {
+        let port = makePort(connected: true, active: [], supported: ["USB2"])
+        let summary = PortSummary(
+            port: port, sources: [usbPD(maxW: 96, winningW: 96)],
+            batteryFullyCharged: false, batteryIsCharging: false, batteryChargeState: .charging,
+            adapter: adapter())
+        #expect(summary.headline.hasPrefix("Charging"), "\(summary.headline)")
+    }
 }

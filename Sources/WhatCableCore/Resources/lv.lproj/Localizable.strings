@@ -457,6 +457,10 @@
 
 "Plugged in, charging on hold" = "Pievienots, uzlāde apturēta";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "Lādētājs un kabelis ir kārtībā. macOS pašlaik ir apturējis uzlādi, parasti akumulatora uzlādes ierobežojuma vai optimizētas akumulatora uzlādes dēļ. Mac joprojām saņem jaudu no lādētāja.";
+"Plugged in, charge limit reached" = "Pievienots, sasniegts uzlādes ierobežojums";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "Lādētājs un kabelis ir kārtībā. Akumulators ir sasniedzis līmeni, līdz kuram macOS to uzlādē, tāpēc uzlāde ir apturēta. Mac joprojām saņem jaudu no lādētāja.";
+"Plugged in, running on battery" = "Pievienots, darbojas ar akumulatoru";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "Lādētājs ir pievienots, taču Mac pašlaik no tā nesaņem jaudu, tāpēc darbojas ar savu akumulatoru.";
 "Plugged in · %lldW charger" = "Pievienots · %lld W lādētājs";
 "Plugged in" = "Pievienots";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Uzlāde apturēta (uzlādes ierobežojums vai optimizēta uzlāde)";

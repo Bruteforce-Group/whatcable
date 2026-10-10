@@ -458,6 +458,10 @@
 
 "Plugged in, charging on hold" = "Tilkoblet, lading satt på pause";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "Laderen og kabelen er i orden. macOS har satt ladingen på pause for nå, vanligvis på grunn av en batteriladingsgrense eller Optimalisert batterilading. Mac-en får fortsatt strøm fra laderen.";
+"Plugged in, charge limit reached" = "Tilkoblet, ladegrensen er nådd";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "Laderen og kabelen er i orden. Batteriet har nådd nivået macOS lader det til, så ladingen har stoppet. Mac-en får fortsatt strøm fra laderen.";
+"Plugged in, running on battery" = "Tilkoblet, går på batteri";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "Laderen er tilkoblet, men Mac-en henter ikke strøm fra den akkurat nå, så den går på batteriet.";
 "Plugged in · %lldW charger" = "Tilkoblet · %lldW lader";
 "Plugged in" = "Tilkoblet";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Lading på pause (ladingsgrense eller Optimalisert batterilading)";

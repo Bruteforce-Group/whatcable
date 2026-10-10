@@ -264,6 +264,9 @@ public final class WatcherHub {
            powerWatcher.readsChargerInputWatts {
             powerWatcher.apply(.init(sources: powerWatcher.sources, charger: charger))
         }
+        // Charge state: once per read, whatever was skipped above. The second
+        // apply above carries no charge state, so it must not feed the window.
+        powerWatcher.applyChargeState(reading.power.chargeState)
         if tbWatcher.refreshGeneration == start.tb { tbWatcher.apply(reading.thunderbolt) } else { skipped = true }
         if usb3Watcher.refreshGeneration == start.usb3 { usb3Watcher.apply(reading.usb3) } else { skipped = true }
         if trmWatcher.refreshGeneration == start.trm { trmWatcher.apply(reading.trm) } else { skipped = true }

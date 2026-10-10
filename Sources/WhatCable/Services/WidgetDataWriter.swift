@@ -194,6 +194,11 @@ final class WidgetDataWriter {
             .sink { [weak self] _ in self?.scheduleWrite() }
             .store(in: &cancellables)
 
+        WatcherHub.shared.powerWatcher.$batteryChargeState
+            .dropFirst()
+            .sink { [weak self] _ in self?.scheduleWrite() }
+            .store(in: &cancellables)
+
         WatcherHub.shared.pdWatcher.$identities
             .dropFirst()
             .sink { [weak self] _ in self?.scheduleWrite() }
@@ -441,8 +446,13 @@ final class WidgetDataWriter {
     /// without needing a live App Group write to succeed first.
     func buildSnapshot() -> (snapshot: WidgetSnapshot, readingWindowRemaining: TimeInterval?) {
         let batteryResult = AppleSmartBatteryReader.read()
-        let batteryFull = batteryResult.battery?.fullyCharged
-        let batteryCharging = batteryResult.battery?.isCharging
+        let chargeState = powerWatcher.batteryChargeState
+        let batteryFlags = BatteryChargeState.resolvedFlags(
+            state: chargeState,
+            isCharging: batteryResult.battery?.isCharging,
+            fullyCharged: batteryResult.battery?.fullyCharged)
+        let batteryFull = batteryFlags.fullyCharged
+        let batteryCharging = batteryFlags.isCharging
         let adapter = SystemPower.currentAdapter()
         let chargerAttached = (adapter?.watts ?? 0) > 0
         let activePortCount = portWatcher.ports.filter { $0.connectionActive == true }.count
@@ -534,6 +544,7 @@ final class WidgetDataWriter {
                 chargerWattageSource: wattageSource,
                 batteryFullyCharged: batteryFull,
                 batteryIsCharging: batteryCharging,
+                batteryChargeState: chargeState,
                 adapter: adapter,
                 connectionAge: connectionAge
             )
@@ -628,8 +639,8 @@ final class WidgetDataWriter {
 
         let powerState = WidgetSnapshot.PowerState(
             batteryPercent: batteryPercent,
-            isCharging: batteryResult.battery?.isCharging ?? false,
-            fullyCharged: batteryResult.battery?.fullyCharged ?? false,
+            isCharging: batteryCharging ?? false,
+            fullyCharged: batteryFull ?? false,
             isDesktopMac: batteryResult.isDesktopMac,
             adapterWatts: adapter?.watts,
             adapterDescription: adapter?.adapterDescription,
@@ -638,7 +649,8 @@ final class WidgetDataWriter {
             recentSystemPower: recentSystemPower
         )
 
-        let snapshot = WidgetSnapshot(ports: entries + builtInDisplayEntries, powerState: powerState)
+        // The debounced state the widget prefers while this file is fresh.
+        let snapshot = WidgetSnapshot(ports: entries + builtInDisplayEntries, powerState: powerState, chargeState: chargeState)
         return (snapshot, Self.readingWindowRemaining(ages: portAges))
     }
 

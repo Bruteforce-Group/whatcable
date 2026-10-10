@@ -457,6 +457,10 @@
 
 "Plugged in, charging on hold" = "Aangesloten, opladen gepauzeerd";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "De oplader en kabel zijn prima. macOS heeft het opladen tijdelijk gepauzeerd, gewoonlijk vanwege een laadlimiet of Geoptimaliseerd batterijladen. De Mac blijft stroom trekken van de oplader.";
+"Plugged in, charge limit reached" = "Aangesloten, laadlimiet bereikt";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "De oplader en kabel zijn prima. De batterij heeft het niveau bereikt waartoe macOS hem oplaadt, dus het opladen is gestopt. De Mac blijft stroom trekken van de oplader.";
+"Plugged in, running on battery" = "Aangesloten, werkt op batterij";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "De oplader is aangesloten, maar de Mac trekt er op dit moment geen stroom van, dus hij werkt op zijn batterij.";
 "Plugged in · %lldW charger" = "Aangesloten · %lldW oplader";
 "Plugged in" = "Aangesloten";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Opladen gepauzeerd (laadlimiet of Geoptimaliseerd batterijladen)";

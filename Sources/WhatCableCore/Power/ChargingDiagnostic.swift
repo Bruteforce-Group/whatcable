@@ -46,9 +46,17 @@ extension ChargingDiagnostic {
         wattageSource: ChargerWattageSource = .unknown,
         batteryFullyCharged: Bool? = nil,
         batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil,
         anotherPortActivelyCharging: Bool = false,
         federatedIdentities: [FederatedIdentity] = []
     ) {
+        // A decided SMC charge state wins over the battery record, which lags a
+        // plug-in by up to about a minute. nil (no SMC keys) and `.notPluggedIn`
+        // leave the record's flags as they were, so those Macs take today's path.
+        let resolved = BatteryChargeState.resolvedFlags(
+            state: batteryChargeState, isCharging: batteryIsCharging, fullyCharged: batteryFullyCharged)
+        let batteryIsCharging = resolved.isCharging
+        let batteryFullyCharged = resolved.fullyCharged
         guard let source = PowerSource.preferredChargingSource(in: sources) else {
             // No `PowerSource` node on this port. On M1 Pro/Max/Ultra macOS never
             // publishes one for USB-C (0/61 corpus-verified), so a charger that is
@@ -156,6 +164,12 @@ extension ChargingDiagnostic {
                 // (deliberately low) contract: with a full battery the low
                 // figure would read as the most this setup can ever deliver.
                 self.detail = String(localized: "Charger and cable are fine. The Mac will draw up to \(chargerMaxW)W when it needs to.", bundle: _coreLocalizedBundle)
+            } else if batteryChargeState == .chargeLimitReached {
+                self.summary = String(localized: "Plugged in, charge limit reached", bundle: _coreLocalizedBundle)
+                self.detail = String(localized: "Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger.", bundle: _coreLocalizedBundle)
+            } else if batteryChargeState == .runningOnBattery {
+                self.summary = String(localized: "Plugged in, running on battery", bundle: _coreLocalizedBundle)
+                self.detail = String(localized: "The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery.", bundle: _coreLocalizedBundle)
             } else if batteryIsCharging == false {
                 self.summary = String(localized: "Plugged in, charging on hold", bundle: _coreLocalizedBundle)
                 self.detail = String(localized: "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger.", bundle: _coreLocalizedBundle)
@@ -170,6 +184,12 @@ extension ChargingDiagnostic {
                 // in the PortSummary subtitle, so the two don't repeat.
                 self.summary = String(localized: "Battery full, not charging", bundle: _coreLocalizedBundle)
                 self.detail = String(localized: "Charger and cable are fine. The Mac will draw up to \(n)W when it needs to.", bundle: _coreLocalizedBundle)
+            } else if batteryChargeState == .chargeLimitReached {
+                self.summary = String(localized: "Plugged in, charge limit reached", bundle: _coreLocalizedBundle)
+                self.detail = String(localized: "Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger.", bundle: _coreLocalizedBundle)
+            } else if batteryChargeState == .runningOnBattery {
+                self.summary = String(localized: "Plugged in, running on battery", bundle: _coreLocalizedBundle)
+                self.detail = String(localized: "The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery.", bundle: _coreLocalizedBundle)
             } else if batteryIsCharging == false {
                 // Charger is connected and negotiated a contract, but the
                 // battery is not accepting charge. macOS does this when a

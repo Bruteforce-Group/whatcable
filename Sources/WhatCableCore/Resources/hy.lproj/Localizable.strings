@@ -458,6 +458,10 @@
 
 "Plugged in, charging on hold" = "Միացված է, լիցքավորումը կասեցված է";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "Լիցքավորիչն ու մալուխը նորմալ են: macOS-ը ժամանակավորապես կասեցրել է լիցքավորումը, սովորաբար մարտկոցի լիցքի սահմանաչափի կամ Օպտիմիզացված մարտկոցի լիցքավորման պատճառով: Mac-ը շարունակում է հոսանք ստանալ լիցքավորիչից:";
+"Plugged in, charge limit reached" = "Միացված է, լիցքի սահմանաչափին հասել է";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "Լիցքավորիչն ու մալուխը նորմալ են: Մարտկոցը հասել է այն մակարդակին, մինչև որը macOS-ը լիցքավորում է այն, ուստի լիցքավորումը դադարել է: Mac-ը շարունակում է հոսանք ստանալ լիցքավորիչից:";
+"Plugged in, running on battery" = "Միացված է, աշխատում է մարտկոցով";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "Լիցքավորիչը միացված է, բայց Mac-ը հիմա հոսանք չի ստանում դրանից, ուստի աշխատում է իր մարտկոցով:";
 "Plugged in · %lldW charger" = "Միացված · %lldW լիցքավորիչ";
 "Plugged in" = "Միացված";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "Լիցքավորումը կասեցված է (լիցքի սահմանաչափ կամ Օպտիմիզացված լիցքավորում)";

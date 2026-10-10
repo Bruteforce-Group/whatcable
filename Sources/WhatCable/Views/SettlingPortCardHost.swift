@@ -46,6 +46,7 @@ struct SettlingPortCardHost: View {
     let chargerWattageSource: ChargerWattageSource
     let batteryFullyCharged: Bool?
     let batteryIsCharging: Bool?
+    let batteryChargeState: BatteryChargeState?
     let adapter: AdapterInfo?
     var anotherPortActivelyCharging: Bool = false
     var connectionDiagnostic: ConnectionDiagnostic? = nil
@@ -122,6 +123,7 @@ struct SettlingPortCardHost: View {
         chargerWattageSource: ChargerWattageSource,
         batteryFullyCharged: Bool?,
         batteryIsCharging: Bool?,
+        batteryChargeState: BatteryChargeState? = nil,
         adapter: AdapterInfo?,
         anotherPortActivelyCharging: Bool = false,
         connectionDiagnostic: ConnectionDiagnostic? = nil,
@@ -148,6 +150,7 @@ struct SettlingPortCardHost: View {
         self.chargerWattageSource = chargerWattageSource
         self.batteryFullyCharged = batteryFullyCharged
         self.batteryIsCharging = batteryIsCharging
+        self.batteryChargeState = batteryChargeState
         self.adapter = adapter
         self.anotherPortActivelyCharging = anotherPortActivelyCharging
         self.connectionDiagnostic = connectionDiagnostic
@@ -285,6 +288,7 @@ struct SettlingPortCardHost: View {
                     chargerWattageSource: chargerWattageSource,
                     batteryFullyCharged: batteryFullyCharged,
                     batteryIsCharging: batteryIsCharging,
+                    batteryChargeState: batteryChargeState,
                     adapter: adapter,
                     anotherPortActivelyCharging: anotherPortActivelyCharging,
                     connectionDiagnostic: connectionDiagnostic,
@@ -324,6 +328,7 @@ struct SettlingPortCardHost: View {
                     chargerWattageSource: .unknown,
                     batteryFullyCharged: nil,
                     batteryIsCharging: nil,
+                    batteryChargeState: nil,
                     adapter: nil,
                     anotherPortActivelyCharging: false,
                     connectionDiagnostic: nil,

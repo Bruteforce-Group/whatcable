@@ -60,7 +60,7 @@ struct CableTimelineProvider: AppIntentTimelineProvider {
     /// match notifications are not needed here, only a single synchronous
     /// property scan.
     @MainActor
-    private func liveSnapshot() -> WidgetSnapshot? {
+    private func liveSnapshot(chargeState: BatteryChargeState?) -> WidgetSnapshot? {
         let portWatcher = AppleHPMInterfaceWatcher()
         let powerWatcher = PowerSourceWatcher()
         let pdWatcher = USBPDSOPWatcher()
@@ -175,7 +175,8 @@ struct CableTimelineProvider: AppIntentTimelineProvider {
             typeCPhys: phyWatcher.phys,
             displayPorts: displayWatcher.statuses.map(\.status),
             batteryFullyCharged: battery.battery?.fullyCharged,
-            batteryIsCharging: battery.battery?.isCharging
+            batteryIsCharging: battery.battery?.isCharging,
+            batteryChargeState: chargeState
         )
 
         log.debug("Live IOKit read: \(ports.count) ports")
@@ -201,14 +202,40 @@ struct CableTimelineProvider: AppIntentTimelineProvider {
 
     /// Live IOKit read first; fall back to the App Group cache.
     /// Never blanks: an old snapshot is shown as-is with the timestamp caption.
+    ///
+    /// Charge state: the app's decided, debounced state from the App Group
+    /// snapshot while that snapshot is fresh (`WidgetSnapshot.chargeStateSource`:
+    /// at most 120 s old by its own `timestamp`). Only with no fresh snapshot
+    /// (the app is not running) does the widget read the SMC itself, with the
+    /// one-shot confirm read. If AppleSMC can't be opened in the widget's
+    /// sandbox that read is nil, and the battery record decides as before.
     private func currentEntry(for configuration: CableWidgetIntent) async -> CableWidgetEntry {
-        if let live = await liveSnapshot() {
+        let cached = cachedSnapshot()
+        let chargeState: BatteryChargeState?
+        switch WidgetSnapshot.chargeStateSource(cached: cached, now: Date()) {
+        case .app(let decided):
+            chargeState = decided
+        case .live:
+            chargeState = await Self.liveConfirmedChargeState()
+        }
+        if let live = await liveSnapshot(chargeState: chargeState) {
             return CableWidgetEntry(date: live.timestamp, snapshot: live, configuration: configuration)
         }
-        if let cached = cachedSnapshot() {
+        if let cached {
             return CableWidgetEntry(date: cached.timestamp, snapshot: cached, configuration: configuration)
         }
         return CableWidgetEntry(date: Date(), snapshot: nil, configuration: configuration)
+    }
+
+    /// The widget's own SMC read, confirmed: used only when the app's snapshot
+    /// is not fresh.
+    private static func liveConfirmedChargeState() async -> BatteryChargeState? {
+        let smc = SMCPowerReader()
+        defer { smc.close() }
+        return await PowerSourceWatcher.confirmedOneShotChargeState(
+            first: PowerSourceWatcher.readChargeState(smcReader: smc),
+            readAgain: { PowerSourceWatcher.readChargeState(smcReader: smc) },
+            sleep: { try? await Task.sleep(for: .seconds($0)) })
     }
 }
 

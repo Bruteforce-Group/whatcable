@@ -30,6 +30,8 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
         let displayWatcher = DisplayPortTransportWatcher()
         let uvdmWatcher = AppleUVDMWatcher()
         var started = false
+        /// The last read's undebounced charge state, for the one-shot confirm.
+        var lastRawChargeState: BatteryChargeState?
 
         init() {
             powerWatcher = PowerSourceWatcher(smcReader: smcReader)
@@ -68,6 +70,8 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
             portWatcher.apply(reading.ports)
             pdWatcher.apply(reading.pd)
             powerWatcher.apply(reading.power)
+            powerWatcher.applyChargeState(reading.power.chargeState)
+            lastRawChargeState = reading.power.chargeState
             tbWatcher.apply(reading.thunderbolt)
             usb3Watcher.apply(reading.usb3)
             trmWatcher.apply(reading.trm)
@@ -93,7 +97,8 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
                 // watcher source now, so no enrich is needed here.
                 displayPorts: displayWatcher.statuses.map(\.status),
                 batteryFullyCharged: battery.battery?.fullyCharged,
-                batteryIsCharging: battery.battery?.isCharging
+                batteryIsCharging: battery.battery?.isCharging,
+                batteryChargeState: powerWatcher.batteryChargeState
             )
             DarwinSnapshotProvider.logChargingSignals(snap)
             return snap
@@ -103,10 +108,19 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
     @MainActor
     private static let state = State()
 
+    /// One read for a one-shot caller (the CLI, the Dashboard's first paint,
+    /// BenchReport). The time window can't elapse inside one read, so a
+    /// running-on-battery result is confirmed by a second SMC read 2 s later.
     @MainActor
     public func snapshot() async throws -> CableSnapshot {
         Self.state.ensureStarted()
-        return Self.state.read()
+        var snap = Self.state.read()
+        let smc = Self.state.smcReader
+        snap.batteryChargeState = await PowerSourceWatcher.confirmedOneShotChargeState(
+            first: Self.state.lastRawChargeState,
+            readAgain: { PowerSourceWatcher.readChargeState(smcReader: smc) },
+            sleep: { try? await Task.sleep(for: .seconds($0)) })
+        return snap
     }
 
     private static func logChargingSignals(_ snap: CableSnapshot) {

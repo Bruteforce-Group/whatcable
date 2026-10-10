@@ -457,6 +457,10 @@
 
 "Plugged in, charging on hold" = "प्लग इन, चार्जिंग रुकी हुई है";
 "Charger and cable are fine. macOS has paused charging for now, usually a battery charge limit or Optimized Battery Charging. The Mac still draws power from the charger." = "चार्जर और केबल ठीक हैं। macOS ने अभी के लिए चार्जिंग रोक दी है, आमतौर पर बैटरी चार्ज सीमा या ऑप्टिमाइज़्ड बैटरी चार्जिंग के कारण। Mac अभी भी चार्जर से पावर ले रहा है।";
+"Plugged in, charge limit reached" = "प्लग इन, चार्ज सीमा तक पहुँच गई";
+"Charger and cable are fine. The battery has reached the level macOS is charging it to, so charging has stopped. The Mac still draws power from the charger." = "चार्जर और केबल ठीक हैं। बैटरी उस स्तर तक पहुँच गई है जहाँ तक macOS उसे चार्ज करता है, इसलिए चार्जिंग रुक गई है। Mac अभी भी चार्जर से पावर ले रहा है।";
+"Plugged in, running on battery" = "प्लग इन, बैटरी पर चल रहा है";
+"The charger is connected, but the Mac isn't drawing power from it right now, so it's running on its battery." = "चार्जर जुड़ा हुआ है, लेकिन Mac अभी उससे पावर नहीं ले रहा है, इसलिए वह अपनी बैटरी पर चल रहा है।";
 "Plugged in · %lldW charger" = "प्लग इन · %lldW चार्जर";
 "Plugged in" = "प्लग इन";
 "Charging on hold (charge limit or Optimized Battery Charging)" = "चार्जिंग रुकी हुई है (चार्ज सीमा या ऑप्टिमाइज़्ड बैटरी चार्जिंग)";

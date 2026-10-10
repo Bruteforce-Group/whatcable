@@ -13,6 +13,7 @@ public enum TextFormatter {
         isDesktopMac: Bool = false,
         batteryFullyCharged: Bool? = nil,
         batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil,
         federatedIdentities: [FederatedIdentity] = [],
         usb3Transports: [USB3Transport] = [],
         trmTransports: [TRMTransport] = [],
@@ -50,7 +51,8 @@ public enum TextFormatter {
             accessoryIdentities: accessoryIdentities,
             displayPorts: displayPorts,
             batteryFullyCharged: batteryFullyCharged,
-            batteryIsCharging: batteryIsCharging
+            batteryIsCharging: batteryIsCharging,
+            batteryChargeState: batteryChargeState
         ))
         // Devices behind a Thunderbolt dock or display match no physical port
         // (issue #274). Two paths, not one:
@@ -94,6 +96,7 @@ public enum TextFormatter {
                 chargerWattageSource: portContext.chargerWattageSource,
                 batteryFullyCharged: context.batteryFullyCharged,
                 batteryIsCharging: context.batteryIsCharging,
+                batteryChargeState: context.batteryChargeState,
                 usbDevices: portContext.matchedDevices,
                 structuralTunnelledDevices: portContext.structurallyScopedTunnelledDevices,
                 displayPorts: portContext.portDisplayPorts,
@@ -251,6 +254,7 @@ public enum TextFormatter {
         chargerWattageSource: ChargerWattageSource = .unknown,
         batteryFullyCharged: Bool? = nil,
         batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil,
         usbDevices: [USBDevice] = [],
         // Tunnelled devices structurally scoped to THIS port (the
         // follow-up): merged into the SAME "Connected devices" tree as
@@ -277,6 +281,7 @@ public enum TextFormatter {
             chargerWattageSource: chargerWattageSource,
             batteryFullyCharged: batteryFullyCharged,
             batteryIsCharging: batteryIsCharging,
+            batteryChargeState: batteryChargeState,
             adapter: adapter
         )
         let label = terminalField(port.portDescription ?? port.serviceName)
@@ -305,7 +310,7 @@ public enum TextFormatter {
             }
         }
 
-        if let diag = ChargingDiagnostic(port: port, sources: sources, identities: identities, adapter: adapter, wattageSource: chargerWattageSource, batteryFullyCharged: batteryFullyCharged, batteryIsCharging: batteryIsCharging, anotherPortActivelyCharging: anotherPortActivelyCharging, federatedIdentities: federatedIdentities) {
+        if let diag = ChargingDiagnostic(port: port, sources: sources, identities: identities, adapter: adapter, wattageSource: chargerWattageSource, batteryFullyCharged: batteryFullyCharged, batteryIsCharging: batteryIsCharging, batteryChargeState: batteryChargeState, anotherPortActivelyCharging: anotherPortActivelyCharging, federatedIdentities: federatedIdentities) {
             let diagColor = diag.isWarning ? ANSI.yellow : ANSI.green
             out += "\n" + ANSI.wrap(ANSI.bold, String(localized: "Charging: ", bundle: _coreLocalizedBundle)) + ANSI.wrap(diagColor, terminalField(diag.summary)) + "\n"
             out += "  " + ANSI.wrap(ANSI.dim, terminalField(diag.detail)) + "\n"

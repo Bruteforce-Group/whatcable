@@ -9,20 +9,31 @@ public struct WidgetSnapshot: Codable, Equatable {
     public let ports: [PortEntry]
     public let timestamp: Date
     public let powerState: PowerState?
+    /// The app's decided, debounced charge state (`BatteryChargeState` raw
+    /// value). Stored as a string so a newer app's state cannot break an older
+    /// widget's decode; `batteryChargeState` reads an unknown value as nil.
+    public let chargeState: String?
 
-    public init(ports: [PortEntry], timestamp: Date = Date(), powerState: PowerState? = nil) {
+    public var batteryChargeState: BatteryChargeState? {
+        chargeState.flatMap(BatteryChargeState.init(rawValue:))
+    }
+
+    public init(ports: [PortEntry], timestamp: Date = Date(), powerState: PowerState? = nil,
+                chargeState: BatteryChargeState? = nil) {
         self.ports = ports
         self.timestamp = timestamp
         self.powerState = powerState
+        self.chargeState = chargeState?.rawValue
     }
 
-    /// Custom decoder so that JSON written before `powerState` was added still
-    /// decodes without error.
+    /// Custom decoder so that JSON written before `powerState` or `chargeState`
+    /// was added still decodes without error.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         ports = try c.decode([PortEntry].self, forKey: .ports)
         timestamp = try c.decode(Date.self, forKey: .timestamp)
         powerState = try c.decodeIfPresent(PowerState.self, forKey: .powerState)
+        chargeState = try c.decodeIfPresent(String.self, forKey: .chargeState)
     }
 
     /// One port's display-ready state. Every field is pre-computed by the
@@ -257,6 +268,9 @@ extension WidgetSnapshot {
         }
 
         public let ports: [Port]
+        /// Included because the widget reads `chargeState` from the file, so a
+        /// change that leaves the port text alone must still trigger a write.
+        public let chargeState: String?
         public let batteryPercent: Int?
         public let isCharging: Bool
         public let fullyCharged: Bool
@@ -291,6 +305,7 @@ extension WidgetSnapshot {
                     accessoryName: p.accessoryName
                 )
             },
+            chargeState: chargeState,
             batteryPercent: powerState?.batteryPercent,
             isCharging: powerState?.isCharging ?? false,
             fullyCharged: powerState?.fullyCharged ?? false,
@@ -358,8 +373,15 @@ extension WidgetSnapshot {
     ///   `CableSnapshot.displayPorts` via DisplayDiagnostic, the same path the
     ///   CLI's JSON output uses.
     public init(from cable: CableSnapshot) {
-        let batteryFullyCharged = cable.batteryFullyCharged
-        let batteryIsCharging = cable.batteryIsCharging
+        // The SMC state (when the snapshot carries one) wins over the lagging
+        // battery record, for the port headline, the wattage gate and the
+        // power-state flags alike.
+        let batteryFlags = BatteryChargeState.resolvedFlags(
+            state: cable.batteryChargeState,
+            isCharging: cable.batteryIsCharging,
+            fullyCharged: cable.batteryFullyCharged)
+        let batteryFullyCharged = batteryFlags.fullyCharged
+        let batteryIsCharging = batteryFlags.isCharging
         let adapter = cable.adapter
         let chargerAttached = (adapter?.watts ?? 0) > 0
         let activePortCount = cable.ports.filter { $0.connectionActive == true }.count
@@ -417,6 +439,7 @@ extension WidgetSnapshot {
                 chargerWattageSource: wattageSource,
                 batteryFullyCharged: batteryFullyCharged,
                 batteryIsCharging: batteryIsCharging,
+                batteryChargeState: cable.batteryChargeState,
                 adapter: adapter
             )
 
@@ -472,8 +495,8 @@ extension WidgetSnapshot {
         let battery = cable.batteryFullyCharged != nil || cable.batteryIsCharging != nil
         let powerState = WidgetSnapshot.PowerState(
             batteryPercent: nil, // not in CableSnapshot; battery % is in SmartBattery reader
-            isCharging: cable.batteryIsCharging ?? false,
-            fullyCharged: cable.batteryFullyCharged ?? false,
+            isCharging: batteryIsCharging ?? false,
+            fullyCharged: batteryFullyCharged ?? false,
             isDesktopMac: cable.isDesktopMac,
             adapterWatts: adapter?.watts,
             adapterDescription: adapter?.adapterDescription,
@@ -517,7 +540,8 @@ extension WidgetSnapshot {
         self.init(
             ports: entries + builtInDisplayEntries,
             timestamp: Date(),
-            powerState: battery ? powerState : nil
+            powerState: battery ? powerState : nil,
+            chargeState: cable.batteryChargeState
         )
     }
 }
@@ -552,5 +576,31 @@ extension WidgetSnapshot.Status {
         case .displayCable: return "display"
         case .unknown: return "questionmark.circle"
         }
+    }
+}
+
+// MARK: - Charge state preference (widget)
+
+extension WidgetSnapshot {
+    /// How old the app's snapshot may be for the widget to trust its charge
+    /// state: two of the writer's 60 s heartbeats. Measured on the snapshot's
+    /// own `timestamp`, the field the writer refreshes on every write.
+    public static let chargeStateFreshness: TimeInterval = 120
+
+    public enum ChargeStateSource: Equatable {
+        /// Use the app's decided state as written (nil means the app decided
+        /// "use the battery record").
+        case app(BatteryChargeState?)
+        /// No fresh snapshot (the app is not running): read the SMC here.
+        case live
+    }
+
+    /// Fresh means the snapshot is between 0 and `chargeStateFreshness`
+    /// seconds old. A timestamp in the future (clock change) is not fresh.
+    public static func chargeStateSource(cached: WidgetSnapshot?, now: Date) -> ChargeStateSource {
+        guard let cached else { return .live }
+        let age = now.timeIntervalSince(cached.timestamp)
+        guard age >= 0, age <= chargeStateFreshness else { return .live }
+        return .app(cached.batteryChargeState)
     }
 }

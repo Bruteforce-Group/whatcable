@@ -105,6 +105,7 @@ extension PortSummary {
         chargerWattageSource: ChargerWattageSource = .unknown,
         batteryFullyCharged: Bool? = nil,
         batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil,
         adapter: AdapterInfo? = nil,
         // Nonnegative elapsed MONOTONIC seconds since CC attach. nil means
         // unknown: one-shot surfaces (CLI, widget extension), or the first
@@ -115,6 +116,13 @@ extension PortSummary {
         // renders post-window wording.
         connectionAge: TimeInterval? = nil
     ) {
+        // A decided SMC charge state wins over the lagging battery record. The
+        // two new states read as on hold here ("Plugged in · NW charger"); the
+        // ChargingDiagnostic banner carries their own wording.
+        let resolved = BatteryChargeState.resolvedFlags(
+            state: batteryChargeState, isCharging: batteryIsCharging, fullyCharged: batteryFullyCharged)
+        let batteryIsCharging = resolved.isCharging
+        let batteryFullyCharged = resolved.fullyCharged
         let connected = isConnectedOverride ?? (port.connectionActive == true)
         let active = port.transportsActive
         let supported = port.transportsSupported

@@ -207,6 +207,27 @@ struct WidgetSnapshotStructuralSignatureTests {
         #expect(a.structuralSignature == b.structuralSignature)
     }
 
+    // The widget reads `chargeState` from the file, so a change that only
+    // moves the charge state (same port text) must still trigger a write.
+    @Test("A charge-state change with identical ports is structural")
+    func chargeStateChangeIsStructural() {
+        let ports = [makePort()]
+        let a = WidgetSnapshot(ports: ports, powerState: nil, chargeState: .onHold)
+        let b = WidgetSnapshot(ports: ports, powerState: nil, chargeState: .chargeLimitReached)
+
+        #expect(a.ports == b.ports, "Fixture setup check: the ports must match, or this test proves nothing")
+        #expect(a.structuralSignature != b.structuralSignature)
+    }
+
+    @Test("The same charge state with identical ports is structurally equal")
+    func sameChargeStateIsEqual() {
+        let ports = [makePort()]
+        let a = WidgetSnapshot(ports: ports, powerState: nil, chargeState: .onHold)
+        let b = WidgetSnapshot(ports: ports, powerState: nil, chargeState: .onHold)
+
+        #expect(a.structuralSignature == b.structuralSignature)
+    }
+
     @Test("The accessory name is structural: it is the row's own detail line")
     func accessoryNameChangeIsStructural() {
         // An iPhone unplugged and an iPad plugged in reads differently on the

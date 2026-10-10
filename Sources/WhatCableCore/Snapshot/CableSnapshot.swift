@@ -210,6 +210,12 @@ public struct CableSnapshot: Equatable {
     /// paused charging (charge limit or Optimized Battery Charging), even
     /// though FullyCharged is still false.
     public let batteryIsCharging: Bool?
+    /// The battery's charge state from the live SMC chain, debounced by the
+    /// watcher (or confirmed by a second read in a one-shot process). nil on
+    /// desktops, on Macs without the keys, and before anything is published;
+    /// consumers then use the two battery-record flags. A `var` so a one-shot
+    /// read can replace it after its confirm read.
+    public var batteryChargeState: BatteryChargeState?
 
     public init(
         ports: [AppleHPMInterface],
@@ -227,7 +233,8 @@ public struct CableSnapshot: Equatable {
         typeCPhys: [AppleTypeCPhy] = [],
         displayPorts: [IOPortTransportStateDisplayPort] = [],
         batteryFullyCharged: Bool? = nil,
-        batteryIsCharging: Bool? = nil
+        batteryIsCharging: Bool? = nil,
+        batteryChargeState: BatteryChargeState? = nil
     ) {
         self.ports = ports
         self.powerSources = powerSources
@@ -245,6 +252,7 @@ public struct CableSnapshot: Equatable {
         self.displayPorts = displayPorts
         self.batteryFullyCharged = batteryFullyCharged
         self.batteryIsCharging = batteryIsCharging
+        self.batteryChargeState = batteryChargeState
     }
 }
 
