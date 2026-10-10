@@ -217,14 +217,14 @@ public final class SMCPowerReader: @unchecked Sendable {
         return Self.decodeBigEndianInt(bytes)
     }
 
-    /// The keys `BatteryChargeState.decide` reads, as named in the Asahi driver.
+    /// The keys `BatteryChargeState.decide` reads.
     static let batteryChargeKeys = ["CH0R", "CHCE", "CHCC", "AC-i", "BSFC", "CHLS", "CHWA", "BUIC", "CHNC", "CHSC"]
 
     /// Builds the chain's inputs from raw key bytes. Pure, so the corpus sweep
     /// runs it on probe 34's captured bytes. Values are decoded little-endian
     /// at the width the SMC returns (CHCE and CHCC are `ui8` on most Macs and
     /// `flag` on some), with one exception: CHNC is used only when it is 8
-    /// bytes, because Asahi reads it with `apple_smc_read_u64`. Any other width
+    /// bytes, because it is a 64-bit field. Any other width
     /// (1 byte on some Macs) counts as unreadable, so CHSC decides.
     static func batteryChargeInputs(read: (String) -> [UInt8]?) -> BatteryChargeInputs {
         var v: [String: UInt64] = [:]

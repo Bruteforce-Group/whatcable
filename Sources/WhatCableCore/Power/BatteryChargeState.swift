@@ -1,8 +1,7 @@
 import Foundation
 
-/// What the battery is doing right now, decided from live SMC keys in Asahi
-/// Linux's order (`macsmc_battery_get_status`, drivers/power/supply/
-/// macsmc-power.c). The battery record (`AppleSmartBattery` IsCharging /
+/// What the battery is doing right now, decided from live SMC keys. The
+/// battery record (`AppleSmartBattery` IsCharging /
 /// FullyCharged) lags a plug-in by up to about 60 s; these keys move within
 /// about 3 s.
 public enum BatteryChargeState: String, Sendable, Equatable, CaseIterable {
@@ -50,7 +49,7 @@ public struct BatteryChargeInputs: Sendable, Equatable {
 }
 
 extension BatteryChargeState {
-    // Bit names follow the Asahi driver.
+    // CHNC reason bits.
     static let chncBatteryFull: UInt64 = 1 << 0
     static let chncBMSBusy: UInt64 = 1 << 23
     static let chncChargeLimit: UInt64 = 1 << 24
@@ -62,7 +61,7 @@ extension BatteryChargeState {
     /// record's answer.
     public static func decide(_ k: BatteryChargeInputs) -> BatteryChargeState? {
         // 1. Power input inhibited.
-        // Asahi reports DISCHARGING for both outcomes here. We split them only so
+        // Both outcomes mean the Mac is on battery. We split them only so
         // an unplugged Mac is never shown as "plugged in, running on battery".
         if let ch0r = k.ch0r, ch0r & ch0rInhibitMask != 0 {
             return k.chce == false ? .notPluggedIn : .runningOnBattery
@@ -89,7 +88,7 @@ extension BatteryChargeState {
         return chsc ? .charging : .onHold
     }
 
-    /// Asahi's charge-limit check. Asahi picks the key at probe time: `CHWA`
+    /// The charge-limit check. The key is chosen once: `CHWA`
     /// when it reads (on: fixed 80 minus 5, off: no limit, `CHLS` never used),
     /// else `CHLS` (end threshold minus 5, only when the threshold is at least
     /// 10). Limited when `BUIC` is at or past the limit.

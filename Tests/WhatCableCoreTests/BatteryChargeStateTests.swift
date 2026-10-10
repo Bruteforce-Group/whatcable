@@ -1,8 +1,7 @@
 import Testing
 @testable import WhatCableCore
 
-/// The SMC charge-state chain step by step, in Asahi Linux's order
-/// (`macsmc_battery_get_status`, drivers/power/supply/macsmc-power.c).
+/// The SMC charge-state chain step by step.
 @Suite("Battery charge state")
 struct BatteryChargeStateTests {
     /// Charger present and able to charge, battery not full, nothing
@@ -76,7 +75,7 @@ struct BatteryChargeStateTests {
         // No CHLS: CHWA on gives the fixed limit 75.
         #expect(decide { $0.chnc = 1 << 23; $0.chwa = true; $0.buic = 75 } == .onHold)
         #expect(decide { $0.chnc = 1 << 23; $0.chwa = false; $0.buic = 90 } == .charging)
-        // Asahi picks the key at probe time: CHWA readable means CHWA is used and
+        // The key is chosen once: CHWA readable means CHWA is used and
         // CHLS never is. CHLS is consulted only when CHWA is absent.
         #expect(decide { $0.chnc = 1 << 23; $0.chls = 0; $0.chwa = true; $0.buic = 80 } == .onHold)
         #expect(decide { $0.chnc = 1 << 23; $0.chls = 80; $0.chwa = false; $0.buic = 90 } == .charging)

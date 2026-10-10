@@ -206,7 +206,7 @@ struct SMCPowerReaderTests {
         #expect(BatteryChargeState.decide(k) == .chargeLimitReached)
     }
 
-    @Test("A 1-byte CHNC is unreadable, as in Asahi's u64 read, so CHSC decides")
+    @Test("A 1-byte CHNC is unreadable, since it is a 64-bit field, so CHSC decides")
     func oneByteCHNCFallsThroughToCHSC() {
         let base: [String: [UInt8]] = ["CHCE": [0x01], "CHCC": [0x01], "BSFC": [0x00], "CHNC": [0x80]]
         func inputs(_ extra: [String: [UInt8]]) -> BatteryChargeInputs {

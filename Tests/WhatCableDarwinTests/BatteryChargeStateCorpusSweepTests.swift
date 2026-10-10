@@ -5,8 +5,8 @@ import Testing
 
 // Replays every battery Mac's probe 34 (raw SMC keys) through the shipping
 // chain: the reader's byte assembly, then `BatteryChargeState.decide`. The
-// oracle below is transcribed from Asahi Linux's `macsmc_battery_get_status`
-// (drivers/power/supply/macsmc-power.c), with its own hex decode, not from
+// oracle below is an independent transcription of the decision order, with
+// its own hex decode, not from
 // the production code. Probe 34's printed "= N" decode is big-endian and is
 // never read.
 @Suite("Battery charge state - corpus sweep (probes 32/34)")
@@ -41,11 +41,11 @@ struct BatteryChargeStateCorpusSweepTests {
         return UInt64(pairs.reversed().joined(), radix: 16)
     }
 
-    /// Asahi's order. nil where the driver would return an error.
+    /// The reference order. nil where no state can be decided.
     static func oracle(_ hex: [String: String]) -> BatteryChargeState? {
         func v(_ key: String) -> UInt64? { hex[key].flatMap { Self.le($0) } }
         if let ch0r = v("CH0R"), ch0r & 0xFFFF & ~UInt64(0x100) != 0 {
-            // Asahi: DISCHARGING either way. Split only so an unplugged Mac is
+            // On battery either way. Split only so an unplugged Mac is
             // never shown as plugged in.
             return v("CHCE") == 0 ? .notPluggedIn : .runningOnBattery
         }
@@ -113,14 +113,14 @@ struct BatteryChargeStateCorpusSweepTests {
         }
     }
 
-    @Test("The shipping chain matches Asahi's order on every battery folder")
+    @Test("The shipping chain matches the reference order on every battery folder")
     func chainMatchesOracle() {
         var checked = 0
         for (folder, hex) in Self.batteryFolders() {
             checked += 1
             let expected = Self.oracle(hex)
             let actual = Self.production(hex)
-            #expect(actual == expected, "\(folder): chain \(String(describing: actual)), Asahi order \(String(describing: expected))")
+            #expect(actual == expected, "\(folder): chain \(String(describing: actual)), reference order \(String(describing: expected))")
         }
         #expect(checked > 0, "No battery folder parsed from probe 34; the rule checked nothing")
     }
