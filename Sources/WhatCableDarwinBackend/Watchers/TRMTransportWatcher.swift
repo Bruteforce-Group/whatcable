@@ -16,8 +16,22 @@ import WhatCableCore
 /// e-marker. These are published separately as `CIOCableCapability`.
 @MainActor
 public final class TRMTransportWatcher: ObservableObject {
-    @Published public private(set) var transports: [TRMTransport] = []
-    @Published public private(set) var cioCapabilities: [CIOCableCapability] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var transports: [TRMTransport] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
+    @Published public private(set) var cioCapabilities: [CIOCableCapability] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
+
+    /// One complete read of every watched transport class.
+    public struct Reading: Sendable, Equatable {
+        public let transports: [TRMTransport]
+        public let cioCapabilities: [CIOCableCapability]
+    }
 
     // Transport state classes that carry TRM properties. USB2 and
     // DisplayPort are the ones confirmed to have meaningful TRM data.
@@ -84,7 +98,14 @@ public final class TRMTransportWatcher: ObservableObject {
         cioCapabilities.removeAll()
     }
 
-    public func refresh() {
+    public func refresh() { apply(Self.readTransports()) }
+
+    public func apply(_ reading: Reading) {
+        if reading.transports != transports { transports = reading.transports }
+        if reading.cioCapabilities != cioCapabilities { cioCapabilities = reading.cioCapabilities }
+    }
+
+    nonisolated public static func readTransports() -> Reading {
         // Build both lists locally and assign once. Mutating the published
         // properties in place (removeAll then re-append) emits a transient
         // empty value that downstream subscribers see as "everything gone."
@@ -123,8 +144,7 @@ public final class TRMTransportWatcher: ObservableObject {
                 }
             }
         }
-        if rebuiltTransports != transports { transports = rebuiltTransports }
-        if rebuiltCIO != cioCapabilities { cioCapabilities = rebuiltCIO }
+        return Reading(transports: rebuiltTransports, cioCapabilities: rebuiltCIO)
     }
 
     private func handleAdded(_ iter: io_iterator_t) {
@@ -147,8 +167,8 @@ public final class TRMTransportWatcher: ObservableObject {
             let className = String(cString: classBuf)
             let transportType = Self.transportType(from: className)
 
-            let t = makeTRMTransport(entryID: entryID, service: service, read: read, transportType: transportType)
-            let c = transportType == "CIO" ? makeCIOCapability(entryID: entryID, service: service, read: read) : nil
+            let t = Self.makeTRMTransport(entryID: entryID, service: service, read: read, transportType: transportType)
+            let c = transportType == "CIO" ? Self.makeCIOCapability(entryID: entryID, service: service, read: read) : nil
             return (t, c)
         }
         for result in results {
@@ -177,14 +197,14 @@ public final class TRMTransportWatcher: ObservableObject {
 
     // MARK: - IOKit wrapper (private)
 
-    private func makeTRMTransport(entryID: UInt64, service: io_service_t, read: (String) -> Any?, transportType: String) -> TRMTransport? {
+    nonisolated private static func makeTRMTransport(entryID: UInt64, service: io_service_t, read: (String) -> Any?, transportType: String) -> TRMTransport? {
         let uuid = wcHPMControllerUUID(for: service)
-        return Self.makeTRMTransport(entryID: entryID, read: read, transportType: transportType, hpmControllerUUID: uuid)
+        return makeTRMTransport(entryID: entryID, read: read, transportType: transportType, hpmControllerUUID: uuid)
     }
 
-    private func makeCIOCapability(entryID: UInt64, service: io_service_t, read: (String) -> Any?) -> CIOCableCapability? {
+    nonisolated private static func makeCIOCapability(entryID: UInt64, service: io_service_t, read: (String) -> Any?) -> CIOCableCapability? {
         let uuid = wcHPMControllerUUID(for: service)
-        return Self.makeCIOCapability(entryID: entryID, read: read, hpmControllerUUID: uuid)
+        return makeCIOCapability(entryID: entryID, read: read, hpmControllerUUID: uuid)
     }
 
     // MARK: - Parse functions (internal, testable)

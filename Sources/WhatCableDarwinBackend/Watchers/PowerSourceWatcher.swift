@@ -15,7 +15,7 @@ public struct PowerSourceSynthesisContext {
     ///
     /// Lazy on purpose: `hpmPortKeys()` walks six IOKit service classes, so
     /// it must only run on the rare tick that's actually about to attempt
-    /// synthesis, not on every `refresh()` call. `synthesizeIfNeeded` only
+    /// synthesis, not on every `refresh()` call. `readSources` only
     /// evaluates this closure right before calling
     /// `PowerSourceSynthesis.synthesizedSource`, after every cheaper gate
     /// has already passed.
@@ -28,6 +28,18 @@ public struct PowerSourceSynthesisContext {
     }
 }
 
+extension PowerSourceSynthesisContext {
+    /// The one wiring every owner uses: this read's ports and identities,
+    /// with the positional port keys walked lazily.
+    public static func live(ports: [AppleHPMInterface], identities: [USBPDSOP]) -> PowerSourceSynthesisContext {
+        PowerSourceSynthesisContext(
+            ports: ports,
+            identities: identities,
+            positionalPortKeys: { PowerService.hpmPortKeysRIDOrdered() }
+        )
+    }
+}
+
 /// Watches `IOPortFeaturePowerSource` services. These appear under a laptop
 /// port's `Power In` feature once a source is attached, one node per candidate
 /// source (`Brick ID`, `TypeC`, `USB-PD`), PD or not; the one that won the
@@ -36,7 +48,14 @@ public struct PowerSourceSynthesisContext {
 /// research/classes/_meaning/IOPortFeaturePowerSource.md (2026-09-16).
 @MainActor
 public final class PowerSourceWatcher: ObservableObject {
-    @Published public private(set) var sources: [PowerSource] = []
+    /// Bumped on every change to the published sources, from any path (apply,
+    /// match/terminate handlers, stop). The hub compares it before and after
+    /// its background read so a stale read never overwrites newer state. The
+    /// charger figures have their own counter, `chargerGeneration`.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var sources: [PowerSource] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
 
     /// Injected by the owner (`WatcherHub` / `DarwinSnapshotProvider`) so
     /// `refresh()` can synthesize a per-port source when macOS publishes none
@@ -50,13 +69,23 @@ public final class PowerSourceWatcher: ObservableObject {
     /// system power-source change notification, so the number stays fresh between
     /// idle polls without a separate per-second timer. 0 on battery or when
     /// nothing is readable. Only populated while ``readsChargerInputWatts`` is on.
-    @Published public private(set) var chargerInputWatts: Int = 0
+    @Published public private(set) var chargerInputWatts: Int = 0 {
+        didSet { chargerGeneration &+= 1 }
+    }
 
     /// The connected charger's rated wattage (its maximum, e.g. 70), used as the
     /// denominator for the menu bar power bar. 0 on battery or when the adapter
     /// doesn't report a rating. Published alongside `chargerInputWatts` on the
     /// same cadence and gate.
-    @Published public private(set) var chargerRatedWatts: Int = 0
+    @Published public private(set) var chargerRatedWatts: Int = 0 {
+        didSet { chargerGeneration &+= 1 }
+    }
+
+    /// Bumped on every change to either charger figure, from any path (apply,
+    /// the power-source notification, switching the readout off). The hub
+    /// compares it before and after its background read, same as
+    /// `refreshGeneration` for the sources.
+    public private(set) var chargerGeneration = 0
 
     /// Whether each refresh should also read the live charger-in wattage. Off by
     /// default, so the common case (menu bar watts readout disabled) does no
@@ -179,35 +208,83 @@ public final class PowerSourceWatcher: ObservableObject {
         refreshChargerInputWatts()
     }
 
-    public func refresh() {
-        // Build the new list locally and assign once. Mutating the published
-        // `sources` in place (removeAll then re-append) emits a transient empty
-        // value that downstream subscribers see as "everything disconnected,"
-        // which made NotificationManager fire a charger-connect/disconnect pair
-        // on every poll tick. See issue #227.
-        var rebuilt = Self.readAllPowerSources()
-        if let synthesized = synthesizeIfNeeded(realSources: rebuilt) {
-            rebuilt.append(synthesized)
+    /// The charger-in readout of one read: what the menu bar shows and the
+    /// adapter's rated maximum. Both 0 on battery.
+    public struct ChargerWatts: Sendable, Equatable {
+        public let input: Int
+        public let rated: Int
+
+        public init(input: Int, rated: Int) {
+            self.input = input
+            self.rated = rated
         }
-        if rebuilt != sources { sources = rebuilt }
-        if readsChargerInputWatts { refreshChargerInputWatts() }
     }
 
+    /// Everything one power read produces. `charger` is nil when the read was
+    /// not asked for the readout, so applying it leaves the figures alone.
+    public struct Reading: Sendable, Equatable {
+        public let sources: [PowerSource]
+        public let charger: ChargerWatts?
+
+        public init(sources: [PowerSource], charger: ChargerWatts?) {
+            self.sources = sources
+            self.charger = charger
+        }
+    }
+
+    public func refresh() {
+        apply(Self.readSources(
+            synthesis: synthesisContext?(),
+            smcReader: smcReader,
+            readCharger: readsChargerInputWatts
+        ))
+    }
+
+    /// Publish a read. Assigns only on change, so subscribers see no churn.
+    public func apply(_ reading: Reading) {
+        // The new list is built before it is assigned, once. Mutating the
+        // published `sources` in place (removeAll then re-append) emits a
+        // transient empty value that downstream subscribers see as
+        // "everything disconnected," which made NotificationManager fire a
+        // charger-connect/disconnect pair on every poll tick. See issue #227.
+        if reading.sources != sources { sources = reading.sources }
+        if let charger = reading.charger {
+            if charger.input != chargerInputWatts { chargerInputWatts = charger.input }
+            if charger.rated != chargerRatedWatts { chargerRatedWatts = charger.rated }
+        }
+    }
+
+    /// The hardware half of `refresh()`: no instance state, so it can run off
+    /// the main thread. `synthesis` is nil when the caller has no ports and
+    /// identities to synthesize against.
+    ///
     /// Attempt `PowerSourceSynthesis` (issue #401). Gated cheap-first so
     /// healthy machines (a real node exists) and idle machines (no active
     /// uncovered USB-C port) never pay for the extra `AppleSmartBattery`
-    /// read: only once both checks below pass do we read the battery
-    /// property dictionary at all.
-    private func synthesizeIfNeeded(realSources: [PowerSource]) -> PowerSource? {
-        guard let context = synthesisContext?() else { return nil }
-        // Cheapest gates first, inside the shared chain. The battery
-        // dictionary is only read once those gates have passed, which is why
-        // this closure is evaluated lazily rather than read up front.
-        return Self.synthesizedSource(
-            realSources: realSources,
-            context: context,
-            smcReader: smcReader,
-            batteryProperties: AppleSmartBatteryReader.properties()
+    /// read: only once both checks in `synthesizedSource` pass do we read the
+    /// battery property dictionary at all.
+    nonisolated public static func readSources(
+        synthesis: PowerSourceSynthesisContext?,
+        smcReader: SMCPowerReader,
+        readCharger: Bool
+    ) -> Reading {
+        var rebuilt = readAllPowerSources()
+        if let synthesis {
+            // Cheapest gates first, inside the shared chain. The battery
+            // dictionary is only read once those gates have passed, which is
+            // why it is an autoclosure rather than read up front.
+            if let s = synthesizedSource(
+                realSources: rebuilt,
+                context: synthesis,
+                smcReader: smcReader,
+                batteryProperties: AppleSmartBatteryReader.properties()
+            ) {
+                rebuilt.append(s)
+            }
+        }
+        return Reading(
+            sources: rebuilt,
+            charger: readCharger ? readChargerWatts(smcReader: smcReader) : nil
         )
     }
 
@@ -449,10 +526,16 @@ public final class PowerSourceWatcher: ObservableObject {
     }
 
     /// Read the live charger-in wattage and publish it when the rounded value
-    /// changes. Same source order the menu bar has always shown: the live SMC
-    /// DC-in rail first, then `AppleSmartBattery`'s coarse `SystemPowerIn`, then
-    /// the rated adapter. Runs on the hub's poll cadence, not a private timer.
+    /// changes. Recomputes the charger figures only, leaving `sources` as is.
     private func refreshChargerInputWatts() {
+        apply(Reading(sources: sources, charger: Self.readChargerWatts(smcReader: smcReader)))
+    }
+
+    /// Read the live charger-in wattage. Same source order the menu bar has
+    /// always shown: the live SMC DC-in rail first, then `AppleSmartBattery`'s
+    /// coarse `SystemPowerIn`, then the rated adapter. Runs on the hub's poll
+    /// cadence, not a private timer.
+    nonisolated static func readChargerWatts(smcReader: SMCPowerReader) -> ChargerWatts {
         let dict = AppleSmartBatteryReader.properties()
         // No battery dict at all means a desktop: treat as always externally
         // powered. A dict without the flag also reads as connected.
@@ -460,28 +543,21 @@ public final class PowerSourceWatcher: ObservableObject {
         // On battery there is nothing to show. Return before the SMC user-client
         // and adapter reads so those run only while a charger is attached (the
         // same short-circuit the old menu-bar read had).
-        guard externalConnected else {
-            if chargerInputWatts != 0 { chargerInputWatts = 0 }
-            if chargerRatedWatts != 0 { chargerRatedWatts = 0 }
-            return
-        }
+        guard externalConnected else { return ChargerWatts(input: 0, rated: 0) }
 
         let smcWatts = smcReader.readSystemPowerInput()?.watts
         let telemetry = dict?["PowerTelemetryData"] as? [String: Any]
         let systemPowerInMilliwatts = telemetry?["SystemPowerIn"] as? Int
         let adapterWatts = SystemPower.currentAdapter()?.watts
 
-        let watts = Self.selectChargerInputWatts(
+        let watts = selectChargerInputWatts(
             externalConnected: externalConnected,
             smcWatts: smcWatts,
             systemPowerInMilliwatts: systemPowerInMilliwatts,
             adapterWatts: adapterWatts
         )
-        if watts != chargerInputWatts { chargerInputWatts = watts }
-
         // The adapter's rated maximum, the denominator for the power bar.
-        let rated = adapterWatts ?? 0
-        if rated != chargerRatedWatts { chargerRatedWatts = rated }
+        return ChargerWatts(input: watts, rated: adapterWatts ?? 0)
     }
 
     /// Pure watts-selection policy, testable without IOKit. Returns 0 on battery

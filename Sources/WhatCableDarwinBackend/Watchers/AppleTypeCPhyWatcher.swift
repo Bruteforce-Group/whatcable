@@ -17,7 +17,21 @@ import os.log
 /// Updates instantly on mode change (notification-driven).
 @MainActor
 public final class AppleTypeCPhyWatcher: ObservableObject {
-    @Published public private(set) var phys: [AppleTypeCPhy] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var phys: [AppleTypeCPhy] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
+
+    /// One complete read of every PHY: the PHYs to publish and the registry
+    /// entry IDs still live, which the apply registers change alerts for and
+    /// prunes against.
+    public struct Reading: Sendable, Equatable {
+        public let phys: [AppleTypeCPhy]
+        public let liveEntryIDs: Set<UInt64>
+    }
 
     /// Kept as a list, mirroring `IOIOThunderboltSwitchWatcher.matchClasses`,
     /// in case Apple ever renames the base the way it did there.
@@ -83,27 +97,54 @@ public final class AppleTypeCPhyWatcher: ObservableObject {
         phys.removeAll()
     }
 
-    public func refresh() {
+    public func refresh() { apply(Self.readPhys()) }
+
+    public func apply(_ reading: Reading) {
+        // Change alerts need a live service handle, which the background
+        // read cannot hand over. Look one up only for a PHY not yet
+        // registered, so the steady tick does no extra IOKit work.
+        for entryID in reading.liveEntryIDs where interestNotifications[entryID] == nil {
+            guard let service = wcService(forEntryID: entryID) else { continue }
+            registerInterest(for: service, entryID: entryID)
+            IOObjectRelease(service)
+        }
+
+        // Release interest notifications for PHY services that are no longer
+        // present. The watcher only subscribes to kIOMatchedNotification (no
+        // kIOTerminatedNotification), so pruning happens here on each refresh
+        // to prevent io_object_t handles accumulating across kext reloads or
+        // power-state transitions that recycle PHY services (W2 fix).
+        for entryID in interestNotifications.keys where !reading.liveEntryIDs.contains(entryID) {
+            if let n = interestNotifications.removeValue(forKey: entryID) {
+                IOObjectRelease(n)
+            }
+        }
+
+        if reading.phys != phys { phys = reading.phys }
+    }
+
+    /// The registry walk behind `refresh()`, with no notification
+    /// registration and no published state, so it can run off the main
+    /// thread.
+    nonisolated public static func readPhys() -> Reading {
         var rebuilt: [AppleTypeCPhy] = []
         var liveEntryIDs: Set<UInt64> = []
 
-        for cls in Self.candidateClasses {
+        for cls in candidateClasses {
             var iter: io_iterator_t = 0
             guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching(cls), &iter) == KERN_SUCCESS else {
                 continue
             }
             defer { IOObjectRelease(iter) }
 
-            // `registerInterest` inside the transform is idempotent, so it is
-            // safe to run again on a discarded, retried pass; only the
-            // `rebuilt`/`liveEntryIDs` merge needs to happen after the walk.
+            // Only the `rebuilt`/`liveEntryIDs` merge needs to happen after
+            // the walk, so a discarded, retried pass is harmless.
             let results = wcDrainAllRetrying(iter) { service -> (phy: AppleTypeCPhy, entryID: UInt64?)? in
                 guard let phy = makePhy(from: service) else { return nil }
                 var entryID: UInt64 = 0
                 guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else {
                     return (phy, nil)
                 }
-                registerInterest(for: service, entryID: entryID)
                 return (phy, entryID)
             }
             for result in results {
@@ -117,22 +158,11 @@ public final class AppleTypeCPhyWatcher: ObservableObject {
             }
         }
 
-        // Release interest notifications for PHY services that are no longer
-        // present. The watcher only subscribes to kIOMatchedNotification (no
-        // kIOTerminatedNotification), so pruning happens here on each refresh
-        // to prevent io_object_t handles accumulating across kext reloads or
-        // power-state transitions that recycle PHY services (W2 fix).
-        for entryID in interestNotifications.keys where !liveEntryIDs.contains(entryID) {
-            if let n = interestNotifications.removeValue(forKey: entryID) {
-                IOObjectRelease(n)
-            }
-        }
-
         rebuilt.sort { $0.id < $1.id }
-        if rebuilt != phys { phys = rebuilt }
+        return Reading(phys: rebuilt, liveEntryIDs: liveEntryIDs)
     }
 
-    private func makePhy(from service: io_service_t) -> AppleTypeCPhy? {
+    nonisolated private static func makePhy(from service: io_service_t) -> AppleTypeCPhy? {
         // Read keys individually rather than fetching the full property
         // dictionary. The bulk fetch (IORegistryEntryCreateCFProperties)
         // can abort the process from inside IOCFUnserializeBinary when

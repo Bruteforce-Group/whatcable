@@ -6,7 +6,21 @@ import WhatCableCore
 /// relevant class is `AppleHPMInterfaceType10` (USB-C) and `Type11` (MagSafe).
 @MainActor
 public final class AppleHPMInterfaceWatcher: ObservableObject {
-    @Published public private(set) var ports: [AppleHPMInterface] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var ports: [AppleHPMInterface] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
+
+    /// One complete read of every port controller: the ports to publish and
+    /// the registry entry IDs still live, which the apply registers change
+    /// alerts for and prunes against.
+    public struct Reading: Sendable, Equatable {
+        public let ports: [AppleHPMInterface]
+        public let liveEntryIDs: Set<UInt64>
+    }
 
     // Match only Type-C / MagSafe physical port controllers. Generic
     // `AppleUSBHostPort` would sweep in internal DRD (dual-role device)
@@ -129,24 +143,57 @@ public final class AppleHPMInterfaceWatcher: ObservableObject {
     /// transition instead of an empty intermediate state. Skips the
     /// assignment entirely when nothing changed, which keeps the UI calm
     /// when refresh() is called speculatively after every device event.
-    public func refresh() {
+    public func refresh() { apply(Self.readPorts()) }
+
+    public func apply(_ reading: Reading) {
+        // Change alerts need a live service handle, which the background
+        // read cannot hand over. Look one up only for a port not yet
+        // registered, so the steady tick does no extra IOKit work.
+        for entryID in reading.liveEntryIDs where interestNotifications[entryID] == nil {
+            guard let service = wcService(forEntryID: entryID) else { continue }
+            registerInterest(for: service, entryID: entryID)
+            IOObjectRelease(service)
+        }
+
+        // Prune interest notifications for port services that are no longer
+        // present in the registry. Only kIOMatchedNotification is registered
+        // (no terminated callback), so without this prune, stale io_object_t
+        // handles would accumulate across plug/unplug cycles without limit.
+        // Each handle is a Mach port reference and must be released explicitly.
+        for entryID in interestNotifications.keys where !reading.liveEntryIDs.contains(entryID) {
+            if let n = interestNotifications.removeValue(forKey: entryID) {
+                IOObjectRelease(n)
+            }
+        }
+
+        // Feed the tracker on every refresh, even when the publish below is
+        // skipped: a session-token-only change already makes `rebuilt !=
+        // ports` today (see `AppleHPMInterface`'s synthesized `Hashable`
+        // conformance, which includes `plugEventCount`/`connectionCount`),
+        // but calling this unconditionally doesn't depend on that staying
+        // true if the struct's equality ever narrows.
+        sessionTracker.observe(reading.ports)
+
+        if reading.ports != ports { ports = reading.ports }
+    }
+
+    /// The registry walk behind `refresh()`, with no notification
+    /// registration and no published state, so it can run off the main
+    /// thread. Unlike `readAllPorts()` it keeps the bulk property fetch, so
+    /// `rawProperties` is the complete dump the watcher has always published.
+    nonisolated public static func readPorts() -> Reading {
         var rebuilt: [AppleHPMInterface] = []
         var liveEntryIDs: Set<UInt64> = []
 
-        for cls in Self.candidateClasses {
+        for cls in candidateClasses {
             let matching = IOServiceMatching(cls)
             var iter: io_iterator_t = 0
             if IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) == KERN_SUCCESS {
                 defer { IOObjectRelease(iter) }
-                // `registerInterest` runs inside the transform: it is
-                // idempotent (guarded by `interestNotifications[entryID] ==
-                // nil`), so it is safe to run again on a discarded, retried
-                // pass. Only `rebuilt`/`liveEntryIDs` need the retry-safe
+                // Only `rebuilt`/`liveEntryIDs` need the retry-safe
                 // merge-after-walk treatment.
                 let ports = wcDrainAllRetrying(iter) { service -> AppleHPMInterface? in
-                    guard let port = Self.makePort(from: service, bulkPropertyFetch: true) else { return nil }
-                    registerInterest(for: service, entryID: port.id)
-                    return port
+                    makePort(from: service, bulkPropertyFetch: true)
                 }
                 for port in ports {
                     guard let port else { continue }
@@ -158,32 +205,13 @@ public final class AppleHPMInterfaceWatcher: ObservableObject {
             }
         }
 
-        // Prune interest notifications for port services that are no longer
-        // present in the registry. Only kIOMatchedNotification is registered
-        // (no terminated callback), so without this prune, stale io_object_t
-        // handles would accumulate across plug/unplug cycles without limit.
-        // Each handle is a Mach port reference and must be released explicitly.
-        for entryID in interestNotifications.keys where !liveEntryIDs.contains(entryID) {
-            if let n = interestNotifications.removeValue(forKey: entryID) {
-                IOObjectRelease(n)
-            }
-        }
-
         // Stable order (serviceName only, no active-first grouping). See
         // `AppleHPMInterface.stableOrder` for why: macOS's #536 power-source
         // attribution churn flips `connectionActive` on its own, and an
         // active-first sort reordered the card list on every flip.
         rebuilt.sort(by: AppleHPMInterface.stableOrder)
 
-        // Feed the tracker on every refresh, even when the publish below is
-        // skipped: a session-token-only change already makes `rebuilt !=
-        // ports` today (see `AppleHPMInterface`'s synthesized `Hashable`
-        // conformance, which includes `plugEventCount`/`connectionCount`),
-        // but calling this unconditionally doesn't depend on that staying
-        // true if the struct's equality ever narrows.
-        sessionTracker.observe(rebuilt)
-
-        if rebuilt != ports { ports = rebuilt }
+        return Reading(ports: rebuilt, liveEntryIDs: liveEntryIDs)
     }
 
     private func drain(iterator: io_iterator_t) {

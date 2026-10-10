@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AppleHPMInterface: Identifiable, Hashable {
+public struct AppleHPMInterface: Identifiable, Hashable, Sendable {
     public let id: UInt64
     public let serviceName: String          // e.g. "Port-USB-C@1"
     public let className: String            // e.g. "AppleHPMInterfaceType10"

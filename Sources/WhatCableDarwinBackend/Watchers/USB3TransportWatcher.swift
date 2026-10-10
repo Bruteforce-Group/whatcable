@@ -9,7 +9,13 @@ import WhatCableCore
 /// "5 Gbps or faster" label.
 @MainActor
 public final class USB3TransportWatcher: ObservableObject {
-    @Published public private(set) var transports: [USB3Transport] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var transports: [USB3Transport] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
 
     private var notifyPort: IONotificationPortRef?
     private var addedIter: io_iterator_t = 0
@@ -57,7 +63,13 @@ public final class USB3TransportWatcher: ObservableObject {
         transports.removeAll()
     }
 
-    public func refresh() {
+    public func refresh() { apply(Self.readTransports()) }
+
+    public func apply(_ transports: [USB3Transport]) {
+        if transports != self.transports { self.transports = transports }
+    }
+
+    nonisolated public static func readTransports() -> [USB3Transport] {
         // Build locally and assign once so subscribers never see a transient
         // empty list mid-refresh. See issue #227.
         var rebuilt: [USB3Transport] = []
@@ -70,11 +82,11 @@ public final class USB3TransportWatcher: ObservableObject {
                 rebuilt.append(t)
             }
         }
-        if rebuilt != transports { transports = rebuilt }
+        return rebuilt
     }
 
     private func handleAdded(_ iter: io_iterator_t) {
-        let found = wcDrainAllRetrying(iter) { service in makeTransport(from: service) }
+        let found = wcDrainAllRetrying(iter) { service in Self.makeTransport(from: service) }
         for t in found {
             guard let t, !transports.contains(where: { $0.id == t.id }) else { continue }
             transports.append(t)
@@ -95,7 +107,7 @@ public final class USB3TransportWatcher: ObservableObject {
 
     // MARK: - IOKit wrapper (private)
 
-    private func makeTransport(from service: io_service_t) -> USB3Transport? {
+    nonisolated private static func makeTransport(from service: io_service_t) -> USB3Transport? {
         var entryID: UInt64 = 0
         guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else { return nil }
 

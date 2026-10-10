@@ -12,7 +12,7 @@ import Foundation
 
 /// Negotiated lane-rate generation for a Thunderbolt link.
 /// Decoded from `Current Link Speed` on a TB-protocol port (Adapter Type = 1).
-public enum LinkGeneration: Hashable {
+public enum LinkGeneration: Hashable, Sendable {
     /// Speed code `0x8`. 10 Gb/s per lane.
     case tb3
     /// Speed code `0x4`. 20 Gb/s per lane. Used by both USB4 v1 and TB4.
@@ -72,7 +72,7 @@ public enum LinkGeneration: Hashable {
 /// a bitmask on `Supported Link Speed`. Each bit set indicates the
 /// controller can negotiate that generation. We keep this as a raw struct
 /// so future generations are representable without a model change.
-public struct SupportedSpeedMask: Hashable {
+public struct SupportedSpeedMask: Hashable, Sendable {
     public let supportsTb3: Bool      // bit 0x8
     public let supportsUsb4Tb4: Bool  // bit 0x4
     public let supportsTb5: Bool      // bit 0x2
@@ -125,7 +125,7 @@ public struct SupportedSpeedMask: Hashable {
 /// Decode of `Current Link Width`. This is a bitmask in the Linux model
 /// (`enum tb_link_width`); preserve it as separate flags so a future TB5
 /// asymmetric link is representable without refactoring.
-public struct LinkWidth: Hashable {
+public struct LinkWidth: Hashable, Sendable {
     public let single: Bool        // bit 0x1
     public let dual: Bool          // bit 0x2
     public let asymmetricTx: Bool  // bit 0x4 (3 TX / 1 RX)
@@ -176,7 +176,7 @@ public struct LinkWidth: Hashable {
 /// and the same capture's asymmetricRx port reads 9, fitting the same
 /// reading. `from` already returns `.unknown(5)` and `.unknown(9)` for
 /// these, unchanged here.
-public enum TargetLinkWidth: Hashable {
+public enum TargetLinkWidth: Hashable, Sendable {
     case single
     case dual
     case unknown(rawValue: UInt8)
@@ -198,7 +198,7 @@ public enum TargetLinkWidth: Hashable {
 /// The `down` / `up` distinction is the adapter's role relative to its
 /// **local** router, not a global host-side / device-side label. In a
 /// daisy-chain, a middle switch has both.
-public enum AdapterType: Hashable {
+public enum AdapterType: Hashable, Sendable {
     case inactive       // 0x000000
     case lane           // 0x000001 — physical TB port
     case nhi            // 0x000002 — host interface (only on root switches)
@@ -247,7 +247,7 @@ public enum AdapterType: Hashable {
 
 /// One Thunderbolt switch in the fabric. Could be a host root (Depth=0)
 /// or a downstream device's internal switch (Depth>0).
-public struct IOThunderboltSwitch: Identifiable, Hashable {
+public struct IOThunderboltSwitch: Identifiable, Hashable, Sendable {
     /// Hardware UID (signed Int64; can be negative). A stable per-device
     /// identifier: internal join key ONLY. Never serialise it into JSON,
     /// --raw, or any user-facing output; use a per-snapshot array index
@@ -546,7 +546,7 @@ public struct IOThunderboltSwitch: Identifiable, Hashable {
 /// adapter, pinning the monitor's video exit point. See
 /// `ThunderboltTopology.tunnels(from:in:)` in `TunnelPath.swift` for the
 /// grouping logic that consumes this.
-public struct HopTableEntry: Hashable {
+public struct HopTableEntry: Hashable, Sendable {
     /// Sequence number of this row within the adapter's hop table.
     public let counter: Int
     /// This adapter's hop ID for the tunnel (the inbound leg).
@@ -569,7 +569,7 @@ public struct HopTableEntry: Hashable {
 
 /// One adapter on a Thunderbolt switch. Could be a physical TB lane port
 /// (with link-state fields) or a protocol-tunnel adapter (DP, PCIe, USB3).
-public struct IOThunderboltPort: Hashable {
+public struct IOThunderboltPort: Hashable, Sendable {
     public let portNumber: Int
     /// String form of `Socket ID`, present on TB-protocol ports.
     /// Matches the `@N` suffix on a root host's USB-C port for the
@@ -647,7 +647,7 @@ public struct IOThunderboltPort: Hashable {
     /// (a path string alone is a reusable topology address). Internal only.
     public let pciEntryID: UInt64?
 
-    public struct BufferAllocation: Hashable {
+    public struct BufferAllocation: Hashable, Sendable {
         public let maxUSB3: Int
         public let maxPCIe: Int
         public let maxHI: Int

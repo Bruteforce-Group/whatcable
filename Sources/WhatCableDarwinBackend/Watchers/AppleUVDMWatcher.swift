@@ -8,7 +8,13 @@ import WhatCableCore
 /// USB-PD) channel.
 @MainActor
 public final class AppleUVDMWatcher: ObservableObject {
-    @Published public private(set) var identities: [AppleAccessoryIdentity] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var identities: [AppleAccessoryIdentity] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
 
     nonisolated static let watchedClass = "IOPortTransportProtocolAppleUVDM"
 
@@ -57,7 +63,13 @@ public final class AppleUVDMWatcher: ObservableObject {
         identities.removeAll()
     }
 
-    public func refresh() {
+    public func refresh() { apply(Self.readIdentities()) }
+
+    public func apply(_ identities: [AppleAccessoryIdentity]) {
+        if identities != self.identities { self.identities = identities }
+    }
+
+    nonisolated public static func readIdentities() -> [AppleAccessoryIdentity] {
         // Rebuild locally and assign once. Mutating the published property in
         // place (removeAll then re-append) emits a transient empty value that
         // downstream subscribers read as "everything gone." See issue #227.
@@ -66,7 +78,7 @@ public final class AppleUVDMWatcher: ObservableObject {
         if IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching(Self.watchedClass), &iter) == KERN_SUCCESS {
             defer { IOObjectRelease(iter) }
             let results = wcDrainAllRetrying(iter) { service -> AppleAccessoryIdentity? in
-                self.makeAccessoryIdentity(service: service)
+                makeAccessoryIdentity(service: service)
             }
             for result in results {
                 guard let result else { continue }
@@ -75,12 +87,12 @@ public final class AppleUVDMWatcher: ObservableObject {
                 }
             }
         }
-        if rebuilt != identities { identities = rebuilt }
+        return rebuilt
     }
 
     private func handleAdded(_ iter: io_iterator_t) {
         let results = wcDrainAllRetrying(iter) { service -> AppleAccessoryIdentity? in
-            self.makeAccessoryIdentity(service: service)
+            Self.makeAccessoryIdentity(service: service)
         }
         for result in results {
             guard let result else { continue }
@@ -104,7 +116,7 @@ public final class AppleUVDMWatcher: ObservableObject {
 
     // MARK: - IOKit wrapper (private)
 
-    private func makeAccessoryIdentity(service: io_service_t) -> AppleAccessoryIdentity? {
+    nonisolated private static func makeAccessoryIdentity(service: io_service_t) -> AppleAccessoryIdentity? {
         var entryID: UInt64 = 0
         guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else { return nil }
 
@@ -119,7 +131,7 @@ public final class AppleUVDMWatcher: ObservableObject {
         }
 
         let uuid = wcHPMControllerUUID(for: service)
-        return Self.makeAccessoryIdentity(entryID: entryID, read: read, hpmControllerUUID: uuid)
+        return makeAccessoryIdentity(entryID: entryID, read: read, hpmControllerUUID: uuid)
     }
 
     // MARK: - Parse function (internal, testable)

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IOKit
 import WhatCableCore
@@ -17,7 +18,13 @@ public final class DisplayPortTransportWatcher: ObservableObject {
         public let status: IOPortTransportStateDisplayPort
     }
 
-    @Published public private(set) var statuses: [DisplayPortUpdate] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var statuses: [DisplayPortUpdate] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
 
     /// Native video output sockets that aren't USB-C and so have no
     /// `AppleHPMInterface` entry (today: the built-in HDMI port on M-series
@@ -88,6 +95,14 @@ public final class DisplayPortTransportWatcher: ObservableObject {
     }
 
     public func refresh() {
+        apply(Self.readStatuses(bitsPerComponent: DisplayModeReader.currentBitsPerComponent()))
+    }
+
+    public func apply(_ statuses: [DisplayPortUpdate]) {
+        if statuses != self.statuses { self.statuses = statuses }
+    }
+
+    nonisolated public static func readStatuses(bitsPerComponent: [CGDirectDisplayID: Int]) -> [DisplayPortUpdate] {
         // Build locally and assign once so subscribers never see a transient
         // empty list mid-refresh. See issue #227.
         var rebuilt: [DisplayPortUpdate] = []
@@ -101,13 +116,12 @@ public final class DisplayPortTransportWatcher: ObservableObject {
                 rebuilt.append(update)
             }
         }
-        let next = enrichedWithLiveMode(rebuilt)
-        if next != statuses { statuses = next }
+        return enrichedWithLiveMode(rebuilt, bitsPerComponent: bitsPerComponent)
     }
 
     private func handleAdded(_ iterator: io_iterator_t) {
         var changed = false
-        let updates = wcDrainAllRetrying(iterator) { service in makeUpdate(from: service) }
+        let updates = wcDrainAllRetrying(iterator) { service in Self.makeUpdate(from: service) }
         for update in updates {
             guard let update else { continue }
             statuses.removeAll { $0.entryID == update.entryID }
@@ -116,7 +130,7 @@ public final class DisplayPortTransportWatcher: ObservableObject {
         }
         // Attach the live on-screen mode to the newly added display(s) so the
         // popover, widget, CLI, and Diagnostics window all agree.
-        if changed { statuses = enrichedWithLiveMode(statuses) }
+        if changed { statuses = Self.enrichedWithLiveMode(statuses, bitsPerComponent: DisplayModeReader.currentBitsPerComponent()) }
     }
 
     /// Attach the live CoreGraphics on-screen mode (`currentMode` / `maxMode`)
@@ -131,11 +145,11 @@ public final class DisplayPortTransportWatcher: ObservableObject {
     /// index is safe. `DisplayTimingReader.enrich` then runs over that result
     /// and, where macOS's own display node matches the display, replaces the
     /// on-screen mode with the driven timing and its pixel clock.
-    private func enrichedWithLiveMode(_ updates: [DisplayPortUpdate]) -> [DisplayPortUpdate] {
+    nonisolated private static func enrichedWithLiveMode(_ updates: [DisplayPortUpdate], bitsPerComponent: [CGDirectDisplayID: Int]) -> [DisplayPortUpdate] {
         // CoreGraphics first (max mode, NSScreen depth), then macOS's own
         // display node, which replaces the on-screen mode with the driven
         // timing and its pixel clock where the node matches the display.
-        let modes = DisplayTimingReader.enrich(DisplayModeReader.enrich(updates.map(\.status)))
+        let modes = DisplayTimingReader.enrich(DisplayModeReader.enrich(updates.map(\.status), bitsPerComponent: bitsPerComponent))
         guard modes.count == updates.count else { return updates }
         return zip(updates, modes).map { update, status in
             DisplayPortUpdate(
@@ -166,7 +180,7 @@ public final class DisplayPortTransportWatcher: ObservableObject {
 
     // MARK: - IOKit wrapper (private)
 
-    private func makeUpdate(from service: io_service_t) -> DisplayPortUpdate? {
+    nonisolated private static func makeUpdate(from service: io_service_t) -> DisplayPortUpdate? {
         // Read keys individually rather than fetching the full property
         // dictionary. The bulk fetch (IORegistryEntryCreateCFProperties)
         // can abort the process from inside IOCFUnserializeBinary when
@@ -188,7 +202,7 @@ public final class DisplayPortTransportWatcher: ObservableObject {
         // is ~2 steps up (AppleHPMInterfaceType10 -> AppleHPMDeviceHALType3).
         let uuid = wcHPMControllerUUID(for: service)
 
-        return Self.makeUpdate(
+        return makeUpdate(
             entryID: entryID,
             read: read,
             portIndex: portIndex,

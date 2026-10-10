@@ -58,7 +58,16 @@ public enum DisplayModeReader {
     /// because the bpc read goes through `NSScreen.screens` underneath.
     @MainActor
     public static func enrich(_ ports: [IOPortTransportStateDisplayPort]) -> [IOPortTransportStateDisplayPort] {
-        let displays = readOnlineDisplays()
+        enrich(ports, bitsPerComponent: currentBitsPerComponent())
+    }
+
+    /// Same as `enrich(_:)` with the per-display bits per component handed in,
+    /// so the CoreGraphics reads can run off the main thread.
+    public static func enrich(
+        _ ports: [IOPortTransportStateDisplayPort],
+        bitsPerComponent: [CGDirectDisplayID: Int]
+    ) -> [IOPortTransportStateDisplayPort] {
+        let displays = readOnlineDisplays(bitsPerComponent: bitsPerComponent)
         guard !displays.isEmpty else { return ports }
         return match(ports: ports, displays: displays)
     }
@@ -150,10 +159,11 @@ public enum DisplayModeReader {
     }
 
     /// Read every online display from CoreGraphics. The one platform-specific
-    /// step; everything downstream is pure. `@MainActor` because the bpc read
-    /// goes through `NSScreen.screens`, which is main-thread-only.
-    @MainActor
-    private static func readOnlineDisplays() -> [ResolvedDisplay] {
+    /// step; everything downstream is pure. The CoreGraphics display calls
+    /// here are safe off the main thread (Quartz Display Services are not
+    /// AppKit); the bpc values come in pre-read because `NSScreen` is
+    /// main-thread-only.
+    private static func readOnlineDisplays(bitsPerComponent: [CGDirectDisplayID: Int]) -> [ResolvedDisplay] {
         var count: UInt32 = 0
         guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
@@ -161,7 +171,7 @@ public enum DisplayModeReader {
 
         return ids.compactMap { id -> ResolvedDisplay? in
             guard let cgMode = CGDisplayCopyDisplayMode(id) else { return nil }
-            let bpc = bitsPerComponent(of: id)
+            let bpc = bitsPerComponent[id]
             let mode = mode(from: cgMode, bitsPerComponent: bpc)
             return ResolvedDisplay(
                 vendorNumber: CGDisplayVendorNumber(id),
@@ -196,13 +206,20 @@ public enum DisplayModeReader {
     /// `NSWindowDepth` constants. The clamp logic is delegated to
     /// `displayPortBitsPerComponent(from:)` so the integer range check is
     /// reachable from tests without going through `NSScreen`.
+    ///
+    /// Bits per component for every screen macOS is driving, keyed by
+    /// display ID. Main-thread only because `NSScreen` is; read once per
+    /// tick on main and handed to the background read.
     @MainActor
-    private static func bitsPerComponent(of id: CGDirectDisplayID) -> Int? {
+    public static func currentBitsPerComponent() -> [CGDirectDisplayID: Int] {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
-        guard let screen = NSScreen.screens.first(where: {
-            ($0.deviceDescription[key] as? NSNumber)?.uint32Value == id
-        }) else { return nil }
-        return displayPortBitsPerComponent(from: screen.depth.bitsPerSample)
+        var out: [CGDirectDisplayID: Int] = [:]
+        for screen in NSScreen.screens {
+            guard let id = (screen.deviceDescription[key] as? NSNumber)?.uint32Value,
+                  let bpc = displayPortBitsPerComponent(from: screen.depth.bitsPerSample) else { continue }
+            out[id] = bpc
+        }
+        return out
     }
 
     /// Clamp a raw `NSScreen.depth.bitsPerSample` value to the two depths we've

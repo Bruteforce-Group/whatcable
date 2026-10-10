@@ -39,7 +39,8 @@ public final class WatcherHub {
     public let displayWatcher = DisplayPortTransportWatcher()
     public let uvdmWatcher    = AppleUVDMWatcher()
 
-    /// Fires once after each steady-poll or burst `refreshAll()`. Lets an
+    /// Fires once after each applied read (steady poll, burst, or any other
+    /// `refreshAll()`), on main, once every watcher has the result. Lets an
     /// always-on consumer (the Pro cable-history sampler) sample at the hub's
     /// own cadence (1 Hz while a UI surface is visible, 30 s idle) without
     /// starting a second IOKit poll. A bare tick, no payload: the consumer reads
@@ -50,6 +51,13 @@ public final class WatcherHub {
     private var pollTask: Task<Void, Never>?
     private var burstTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
+
+    /// The shared hardware read. The real one for `shared`; tests inject a fake.
+    private let read: @Sendable (HubReadRequest, SMCPowerReader) -> HubReading
+    /// A read is running off the main thread right now.
+    private var readInFlight = false
+    /// One more read is owed once the running one finishes.
+    private var followUpQueued = false
 
     /// Steady-poll cadence. 1 Hz while a UI surface (the popover or a visible
     /// window) is on screen, so live readings tick smoothly. When nothing is
@@ -71,7 +79,15 @@ public final class WatcherHub {
     /// Derived: a UI surface is visible when at least one surface is on screen.
     private var isUIVisible: Bool { !visibleSurfaces.isEmpty }
 
-    private init() {
+    private convenience init() {
+        self.init(read: { HubRead.readAll($0, smcReader: $1) })
+    }
+
+    /// Internal so only this module and `@testable` tests can build a hub with
+    /// a custom read; everything else goes through `shared`. A test hub that
+    /// never calls `start()` opens no IOKit notification ports.
+    init(read: @escaping @Sendable (HubReadRequest, SMCPowerReader) -> HubReading) {
+        self.read = read
         // Assigned here rather than inline because it needs `smcReader`, and a
         // stored property's own initialiser cannot see its siblings.
         powerWatcher = PowerSourceWatcher(smcReader: smcReader)
@@ -97,14 +113,7 @@ public final class WatcherHub {
         // state, never touches the hub's own lifecycle.
         powerWatcher.synthesisContext = { [weak self] in
             guard let self else { return nil }
-            return PowerSourceSynthesisContext(
-                ports: self.portWatcher.ports,
-                identities: self.pdWatcher.identities,
-                // hpmPortKeys() walks six IOKit service classes; wrapped in
-                // a closure so it only runs on the rare tick that reaches
-                // the actual synthesis call, not on every refresh().
-                positionalPortKeys: { PowerService.hpmPortKeysRIDOrdered() }
-            )
+            return .live(ports: self.portWatcher.ports, identities: self.pdWatcher.identities)
         }
 
         // Initial synchronous readiness refresh (issue #568). On M1 Pro/Max/Ultra
@@ -169,21 +178,103 @@ public final class WatcherHub {
         startPoll()
     }
 
-    public func refreshAll() {
-        portWatcher.refresh()
-        // pdWatcher before powerWatcher: PowerSourceSynthesis's partner-kind
-        // attribution rung (issue #401) needs this tick's identities, not
-        // last tick's, to recognise a power-brick SOP partner.
-        pdWatcher.refresh()
-        powerWatcher.refresh()
-        tbWatcher.refresh()
-        usb3Watcher.refresh()
-        trmWatcher.refresh()
-        displayWatcher.refresh()
-        uvdmWatcher.refresh()
-        didRefresh.send(())
+    /// Ask for a fresh read. Returns at once; the result is applied on main
+    /// and `didRefresh` fires after it. The read runs off the main thread so a
+    /// slow registry (a busy dock) never freezes the UI.
+    public func refreshAll() { requestRefresh(steady: false) }
+
+    /// `steady` is the 1 Hz / 30 s poll. A steady tick that lands while a read
+    /// is running is dropped: the running read is already fresh enough. Any
+    /// other request (a burst after a plug event, a surface becoming visible,
+    /// the refresh button) queues one more read for when the current one
+    /// finishes, so a change is never missed.
+    func requestRefresh(steady: Bool) {
+        guard !readInFlight else {
+            if !steady { followUpQueued = true }
+            return
+        }
+        readInFlight = true
+        let request = HubReadRequest(
+            readsChargerWatts: powerWatcher.readsChargerInputWatts,
+            displayBitsPerComponent: DisplayModeReader.currentBitsPerComponent(),
+            includesPhy: false
+        )
+        let generations = currentGenerations()
+        let read = self.read
+        let smc = smcReader
+        Task { @MainActor [weak self] in
+            let reading = await Task.detached(priority: .userInitiated) { read(request, smc) }.value
+            guard let self else { return }
+            self.apply(reading, readStartedAt: generations)
+            self.didRefresh.send(())
+            self.readInFlight = false
+            if self.followUpQueued {
+                self.followUpQueued = false
+                self.requestRefresh(steady: false)
+            }
+        }
     }
 
+    /// Each watcher's `refreshGeneration` at the moment a read started.
+    private struct Generations {
+        let port, pd, power, charger, tb, usb3, trm, display, uvdm: Int
+    }
+
+    private func currentGenerations() -> Generations {
+        Generations(
+            port: portWatcher.refreshGeneration,
+            pd: pdWatcher.refreshGeneration,
+            power: powerWatcher.refreshGeneration,
+            charger: powerWatcher.chargerGeneration,
+            tb: tbWatcher.refreshGeneration,
+            usb3: usb3Watcher.refreshGeneration,
+            trm: trmWatcher.refreshGeneration,
+            display: displayWatcher.refreshGeneration,
+            uvdm: uvdmWatcher.refreshGeneration
+        )
+    }
+
+    /// Hand a finished read to each watcher, in the read's own order (port,
+    /// PD, power, Thunderbolt, USB3, TRM, display, UVDM).
+    ///
+    /// A watcher whose generation moved since the read started is skipped: a
+    /// change alert or match handler published newer state while this read
+    /// was running. Applying the older read would roll it back, and for ports
+    /// would feed the session tracker a false transition. Any skip queues a
+    /// follow-up read, because the other watchers' results (power synthesis
+    /// in particular) were computed from the skipped watcher's older read, and
+    /// one more read brings them back in line.
+    private func apply(_ reading: HubReading, readStartedAt start: Generations) {
+        var skipped = false
+        if portWatcher.refreshGeneration == start.port { portWatcher.apply(reading.ports) } else { skipped = true }
+        if pdWatcher.refreshGeneration == start.pd { pdWatcher.apply(reading.pd) } else { skipped = true }
+        // Power was synthesized from this read's ports and PD identities, so a
+        // skipped port or PD slice makes it stale too (`skipped` is already set).
+        if powerWatcher.refreshGeneration == start.power, !skipped {
+            powerWatcher.apply(.init(sources: reading.power.sources, charger: nil))
+        } else {
+            skipped = true
+        }
+        // The charger figures have their own generation and do not depend on
+        // ports or PD. They also need the readout still on: switching it off
+        // mid-read zeroes them, and the read's figures must not come back. No
+        // follow-up for a charger skip: the next tick reads it again.
+        if let charger = reading.power.charger,
+           powerWatcher.chargerGeneration == start.charger,
+           powerWatcher.readsChargerInputWatts {
+            powerWatcher.apply(.init(sources: powerWatcher.sources, charger: charger))
+        }
+        if tbWatcher.refreshGeneration == start.tb { tbWatcher.apply(reading.thunderbolt) } else { skipped = true }
+        if usb3Watcher.refreshGeneration == start.usb3 { usb3Watcher.apply(reading.usb3) } else { skipped = true }
+        if trmWatcher.refreshGeneration == start.trm { trmWatcher.apply(reading.trm) } else { skipped = true }
+        if displayWatcher.refreshGeneration == start.display { displayWatcher.apply(reading.display) } else { skipped = true }
+        if uvdmWatcher.refreshGeneration == start.uvdm { uvdmWatcher.apply(reading.uvdm) } else { skipped = true }
+        if skipped { followUpQueued = true }
+    }
+
+    /// The steady poll. Each tick requests a read and goes straight back to
+    /// sleep, so the period is the interval itself, not interval plus read
+    /// time; a tick that lands while a read is still running is dropped.
     private func startPoll() {
         pollTask?.cancel()
         let interval = isUIVisible ? activeInterval : idleInterval
@@ -191,7 +282,7 @@ public final class WatcherHub {
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { return }
-                self.refreshAll()
+                self.requestRefresh(steady: true)
             }
         }
     }

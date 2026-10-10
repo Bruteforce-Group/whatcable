@@ -17,14 +17,30 @@ import os.log
 ///   actual property decoding so unit tests can run on hand-built dictionaries.
 @MainActor
 public final class IOIOThunderboltSwitchWatcher: ObservableObject {
-    @Published public private(set) var switches: [IOThunderboltSwitch] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var switches: [IOThunderboltSwitch] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
+
+    /// One complete read of every switch service. `liveEntryIDs` is every
+    /// switch still in the registry (the prune key); `modelEntryIDs` is the
+    /// subset that built a model, which is what change alerts are
+    /// registered for.
+    public struct Reading: Sendable, Equatable {
+        public let switches: [IOThunderboltSwitch]
+        public let liveEntryIDs: Set<UInt64>
+        public let modelEntryIDs: Set<UInt64>
+    }
 
     /// Class names to match. Apple uses `IOIOThunderboltSwitch*` on some
     /// macOS / Mac generations and `IOThunderboltSwitch*` on others (M5 /
     /// macOS 26 was observed to ship `IOThunderboltSwitchType7` without
     /// the double-IO prefix, while older Macs ship `IOIOThunderboltSwitchType5`).
     /// Registering against both ensures the watcher works across the fleet.
-    private static let matchClasses = ["IOIOThunderboltSwitch", "IOThunderboltSwitch"]
+    nonisolated private static let matchClasses = ["IOIOThunderboltSwitch", "IOThunderboltSwitch"]
 
     private var notifyPort: IONotificationPortRef?
     private var matchIterators: [io_iterator_t] = []
@@ -112,7 +128,47 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
     /// snapshot read, mirroring `AppleHPMInterfaceWatcher.refresh()`. Property
     /// changes (link-state moves) tend to arrive via interest notifications
     /// but we don't rely on them for correctness.
-    public func refresh() {
+    public func refresh() { apply(Self.readSwitches()) }
+
+    public func apply(_ reading: Reading) {
+        if reading.liveEntryIDs.isEmpty {
+            // No switches present: release any lingering interest-notification
+            // handles and clear the published list.
+            for (_, n) in interestNotifications { IOObjectRelease(n) }
+            interestNotifications.removeAll()
+            if !switches.isEmpty { switches = [] }
+            return
+        }
+
+        // Change alerts need a live service handle, which the background
+        // read cannot hand over. Look one up only for a switch not yet
+        // registered, so the steady tick does no extra IOKit work.
+        for entryID in reading.modelEntryIDs where interestNotifications[entryID] == nil {
+            guard let service = wcService(forEntryID: entryID) else { continue }
+            registerInterest(for: service, entryID: entryID)
+            IOObjectRelease(service)
+        }
+
+        // Prune interest notifications for switch services that are no longer
+        // present in the registry. Only kIOMatchedNotification is registered
+        // (no terminated callback), so without this prune, stale io_object_t
+        // handles would accumulate across plug/unplug cycles without limit.
+        // Each handle is a Mach port reference and must be released explicitly.
+        // `liveEntryIDs` was built in the read's first-pass walk and holds every
+        // entry ID still live in the registry, so it doubles as the prune key.
+        for entryID in interestNotifications.keys where !reading.liveEntryIDs.contains(entryID) {
+            if let n = interestNotifications.removeValue(forKey: entryID) {
+                IOObjectRelease(n)
+            }
+        }
+
+        if reading.switches != switches { switches = reading.switches }
+    }
+
+    /// The registry walk behind `refresh()`, with no notification
+    /// registration and no published state, so it can run off the main
+    /// thread.
+    nonisolated public static func readSwitches() -> Reading {
         // First pass: build a list of (service, props, parent entry ID) so
         // we can resolve parent UIDs in a second pass once every switch has
         // been parsed.
@@ -149,7 +205,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
         // Querying both keeps the watcher generation-agnostic. If the same
         // service somehow matches both (it shouldn't, but defensive),
         // entry-ID dedup keeps it once.
-        for matchClassName in Self.matchClasses {
+        for matchClassName in matchClasses {
             let matching = IOServiceMatching(matchClassName)
             var iter: io_iterator_t = 0
             guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) == KERN_SUCCESS else {
@@ -160,7 +216,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
             // Note this class's io_service_t handles are NOT released as
             // they're read: unlike most watchers, `raw` keeps them alive
             // (for the second pass below) and the `defer` at the top of
-            // `refresh()` releases all of them together once every class
+            // `readSwitches()` releases all of them together once every class
             // has been walked. So a discarded, retried pass here must
             // release the handles it already put into `raw` itself, and roll
             // back `seenEntryIDs`, before re-walking.
@@ -207,7 +263,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
                     // plane, so this gives us the parent linkage for free. For a
                     // host root (no switch ancestor), the same walk also surfaces
                     // the acioN root name (port-scoping join, see `switchAncestry`).
-                    let ancestry = switchAncestry(of: service)
+                    let ancestry = Self.switchAncestry(of: service)
 
                     raw.append(RawEntry(
                         service: service,
@@ -238,12 +294,9 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
         }
 
         if raw.isEmpty {
-            // No switches present: release any lingering interest-notification
-            // handles and clear the published list.
-            for (_, n) in interestNotifications { IOObjectRelease(n) }
-            interestNotifications.removeAll()
-            if !switches.isEmpty { switches = [] }
-            return
+            // No switches present: the apply releases any lingering
+            // interest-notification handles and clears the published list.
+            return Reading(switches: [], liveEntryIDs: [], modelEntryIDs: [])
         }
 
         // Build a UID lookup keyed by registry entry ID. Stable across
@@ -257,6 +310,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
 
         var rebuilt: [IOThunderboltSwitch] = []
         rebuilt.reserveCapacity(raw.count)
+        var modelEntryIDs: Set<UInt64> = []
 
         for entry in raw {
             // If UID was unreadable in the first pass, skip -- from() would
@@ -264,7 +318,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
             // other per-key reads getting there.
             guard let uid = entry.uid else { continue }
 
-            let ports = parsePorts(of: entry.service)
+            let ports = Self.parsePorts(of: entry.service)
             let parentUID: Int64? = entry.parentEntryID != 0
                 ? uidByEntryID[entry.parentEntryID]
                 : nil
@@ -285,20 +339,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
                 acioRootName: entry.acioRootName
             ) {
                 rebuilt.append(model)
-                registerInterest(for: entry.service, entryID: entry.entryID)
-            }
-        }
-
-        // Prune interest notifications for switch services that are no longer
-        // present in the registry. Only kIOMatchedNotification is registered
-        // (no terminated callback), so without this prune, stale io_object_t
-        // handles would accumulate across plug/unplug cycles without limit.
-        // Each handle is a Mach port reference and must be released explicitly.
-        // seenEntryIDs was built in the first-pass walk above and holds every
-        // entry ID still live in the registry, so it doubles as the prune key.
-        for entryID in interestNotifications.keys where !seenEntryIDs.contains(entryID) {
-            if let n = interestNotifications.removeValue(forKey: entryID) {
-                IOObjectRelease(n)
+                modelEntryIDs.insert(entry.entryID)
             }
         }
 
@@ -309,7 +350,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
             return lhs.id < rhs.id
         }
 
-        if rebuilt != switches { switches = rebuilt }
+        return Reading(switches: rebuilt, liveEntryIDs: seenEntryIDs, modelEntryIDs: modelEntryIDs)
     }
 
     /// The ports of a switch service, ready for `IOThunderboltSwitch.from`:
@@ -329,7 +370,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
         portsInPortNumberOrder(readChildren())
     }
 
-    private func parsePorts(of switchService: io_service_t) -> [IOThunderboltPort] {
+    nonisolated private static func parsePorts(of switchService: io_service_t) -> [IOThunderboltPort] {
         Self.parsePorts(readChildren: { Self.portChildrenInRegistryOrder(of: switchService) })
     }
 
@@ -415,7 +456,7 @@ public final class IOIOThunderboltSwitchWatcher: ObservableObject {
     /// where two `io_service_t` values for the same registry object
     /// compare unequal because IOKit can hand back distinct mach-port
     /// handles for the same underlying entry.
-    private func switchAncestry(of service: io_service_t) -> AncestryResult {
+    nonisolated private static func switchAncestry(of service: io_service_t) -> AncestryResult {
         var current = service
         IOObjectRetain(current)
         defer { IOObjectRelease(current) }

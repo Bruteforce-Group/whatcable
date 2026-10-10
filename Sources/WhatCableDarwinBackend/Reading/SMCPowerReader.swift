@@ -19,8 +19,11 @@ import WhatCableCore
 /// state.
 ///
 /// Read-only: it only ever reads keys, never writes.
-public final class SMCPowerReader {
+// Sendable via `lock`: every public entry point holds it, so the connection is never opened, used or closed on two threads at once.
+public final class SMCPowerReader: @unchecked Sendable {
     private var connection: io_connect_t = 0
+    /// Recursive because the public reads call `open()` while holding it.
+    private let lock = NSRecursiveLock()
 
     public init() {
         // The kernel reads this struct at fixed C offsets and rejects any other
@@ -40,6 +43,7 @@ public final class SMCPowerReader {
     /// false when AppleSMC is missing or the open is refused.
     @discardableResult
     public func open() -> Bool {
+        lock.lock(); defer { lock.unlock() }
         if connection != 0 { return true }
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
         guard service != 0 else { return false }
@@ -52,6 +56,7 @@ public final class SMCPowerReader {
     }
 
     public func close() {
+        lock.lock(); defer { lock.unlock() }
         if connection != 0 {
             IOServiceClose(connection)
             connection = 0
@@ -63,6 +68,7 @@ public final class SMCPowerReader {
     /// is only returned when it has a usable `DxUI`, since without it the
     /// channel can't be tied to a port.
     public func readPortPowerChannels() -> [SMCPortPowerChannel] {
+        lock.lock(); defer { lock.unlock() }
         guard open() else { return [] }
         var channels: [SMCPortPowerChannel] = []
         for index in 1...4 {
@@ -90,6 +96,7 @@ public final class SMCPowerReader {
     /// Unlike per-port metering, this works on every supported desktop including
     /// M1/M2 Mac minis (the DC-in keys don't depend on the per-port UUID map).
     public func readSystemPowerInput() -> SMCSystemPowerInput? {
+        lock.lock(); defer { lock.unlock() }
         guard open() else { return nil }
         let volts = readFloat("VD0R")
         let amps = readFloat("ID0R")
@@ -114,6 +121,7 @@ public final class SMCPowerReader {
     /// A channel is only returned when it has a usable `DxUI` (without it
     /// nothing can be tied to a port) and a positive power figure.
     public func readPortContracts() -> [SMCPortContract] {
+        lock.lock(); defer { lock.unlock() }
         guard open() else { return [] }
         var contracts: [SMCPortContract] = []
         for index in 1...4 {
@@ -145,6 +153,7 @@ public final class SMCPowerReader {
     /// in the probe corpus. Callers prefer this on battery and fall back to the
     /// gauge when it returns `nil`.
     public func readBatteryPowerMW() -> Int? {
+        lock.lock(); defer { lock.unlock() }
         guard open() else { return nil }
         guard let watts = readFloat("PPBR") else { return nil }
         // Guard against an absent/garbage key: real discharge is a few watts to

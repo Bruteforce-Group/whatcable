@@ -2,8 +2,9 @@ import Foundation
 import os.log
 import WhatCableCore
 
-/// macOS implementation of `CableSnapshotProvider`. Wraps the four IOKit
-/// watcher classes and assembles their state into a `CableSnapshot`.
+/// macOS implementation of `CableSnapshotProvider`. Takes the shared
+/// `HubRead` hardware read, publishes it through the IOKit watcher classes
+/// and assembles their state into a `CableSnapshot`.
 ///
 /// `snapshot()` starts the watchers once, refreshes the polling-driven ones
 /// (the others fire IOKit match notifications during start), and reads.
@@ -18,7 +19,8 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
     @MainActor
     private final class State {
         let portWatcher = AppleHPMInterfaceWatcher()
-        let powerWatcher = PowerSourceWatcher()
+        let smcReader = SMCPowerReader()
+        let powerWatcher: PowerSourceWatcher
         let pdWatcher = USBPDSOPWatcher()
         let usbWatcher = USBWatcher()
         let tbWatcher = IOIOThunderboltSwitchWatcher()
@@ -28,6 +30,10 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
         let displayWatcher = DisplayPortTransportWatcher()
         let uvdmWatcher = AppleUVDMWatcher()
         var started = false
+
+        init() {
+            powerWatcher = PowerSourceWatcher(smcReader: smcReader)
+        }
 
         func ensureStarted() {
             guard !started else { return }
@@ -42,40 +48,32 @@ public final class DarwinSnapshotProvider: CableSnapshotProvider, @unchecked Sen
             displayWatcher.start()
             uvdmWatcher.start()
 
-            // Lets powerWatcher.refresh() synthesize a per-port source when
-            // macOS never publishes a real IOPortFeaturePowerSource node
-            // (M1 Pro/Max/Ultra USB-C, issue #401).
-            powerWatcher.synthesisContext = { [weak self] in
-                guard let self else { return nil }
-                return PowerSourceSynthesisContext(
-                    ports: self.portWatcher.ports,
-                    identities: self.pdWatcher.identities,
-                    // hpmPortKeys() walks six IOKit service classes; wrapped
-                    // in a closure so it only runs on the rare tick that
-                    // reaches the actual synthesis call, not on every read().
-                    positionalPortKeys: { PowerService.hpmPortKeysRIDOrdered() }
-                )
-            }
-
             started = true
         }
 
         func read() -> CableSnapshot {
-            // AppleHPMInterface property changes don't fire match notifications,
-            // so refresh on every read. The others are notification-driven
-            // but refresh is cheap and keeps reads consistent.
-            portWatcher.refresh()
-            // pdWatcher before powerWatcher: PowerSourceSynthesis's
-            // partner-kind attribution rung (issue #401) needs this tick's
-            // identities, not last tick's.
-            pdWatcher.refresh()
-            powerWatcher.refresh()
-            tbWatcher.refresh()
-            usb3Watcher.refresh()
-            trmWatcher.refresh()
-            phyWatcher.refresh()
-            displayWatcher.refresh()
-            uvdmWatcher.refresh()
+            // One shared read (HubRead) in the fixed order, then each watcher
+            // publishes its piece. AppleHPMInterface property changes don't
+            // fire match notifications, so every read refreshes everything;
+            // the others are notification-driven but the read is cheap and
+            // keeps the snapshot consistent. Power synthesis (issue #401)
+            // is built inside the read from this read's own ports and
+            // identities.
+            let reading = HubRead.readAll(
+                HubReadRequest(readsChargerWatts: false,
+                               displayBitsPerComponent: DisplayModeReader.currentBitsPerComponent(),
+                               includesPhy: true),
+                smcReader: smcReader
+            )
+            portWatcher.apply(reading.ports)
+            pdWatcher.apply(reading.pd)
+            powerWatcher.apply(reading.power)
+            tbWatcher.apply(reading.thunderbolt)
+            usb3Watcher.apply(reading.usb3)
+            trmWatcher.apply(reading.trm)
+            if let phy = reading.phy { phyWatcher.apply(phy) }
+            displayWatcher.apply(reading.display)
+            uvdmWatcher.apply(reading.uvdm)
             let battery = AppleSmartBatteryReader.read()
             let snap = CableSnapshot(
                 ports: portWatcher.ports,

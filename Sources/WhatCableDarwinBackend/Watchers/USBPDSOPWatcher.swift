@@ -22,9 +22,23 @@ import WhatCableCore
 /// doc comments carry the numbers).
 @MainActor
 public final class USBPDSOPWatcher: ObservableObject {
-    @Published public private(set) var identities: [USBPDSOP] = []
+    /// Bumped on every change to the published state, from any path (apply,
+    /// match/terminate handlers, drain, stop). The hub compares it before and
+    /// after its background read so a stale read never overwrites newer state.
+    public private(set) var refreshGeneration = 0
+    @Published public private(set) var identities: [USBPDSOP] = [] {
+        didSet { refreshGeneration &+= 1 }
+    }
 
-    private static let matchedClasses = [
+    /// One complete read: every identity to publish, and the entry IDs of
+    /// the StateCC MagSafe candidates still in the registry, which the apply
+    /// registers change alerts for and prunes against.
+    public struct Reading: Sendable, Equatable {
+        public let identities: [USBPDSOP]
+        public let stateCCEntryIDs: Set<UInt64>
+    }
+
+    nonisolated private static let matchedClasses = [
         "IOPortTransportComponentCCUSBPDSOP",
         "IOPortTransportComponentCCUSBPDSOPp",
         "IOPortTransportComponentCCUSBPDSOPpp",
@@ -33,7 +47,7 @@ public final class USBPDSOPWatcher: ObservableObject {
     /// Matched separately from `matchedClasses` above: it needs its own
     /// candidate/parse rules and interest-notification lifecycle, never the
     /// generic SOP-component handling.
-    private static let stateCCClassName = "IOPortTransportStateCC"
+    nonisolated private static let stateCCClassName = "IOPortTransportStateCC"
 
     private var notifyPort: IONotificationPortRef?
     private var iterators: [io_iterator_t] = []
@@ -138,7 +152,7 @@ public final class USBPDSOPWatcher: ObservableObject {
         // iterator is drained immediately, same as every other class here,
         // which is what gets an ALREADY-INACTIVE MagSafe node subscribed for
         // interest at launch: candidacy (and therefore the interest
-        // registration inside `processStateCCService`) never depends on
+        // registration inside `handleStateCCAdded`) never depends on
         // `Active` or the SOP1 keys, only on the port type. Without this, a
         // Mac that starts up unplugged would never hear the later plug event
         // except through the 30 s idle poll.
@@ -177,11 +191,38 @@ public final class USBPDSOPWatcher: ObservableObject {
         identities.removeAll()
     }
 
-    public func refresh() {
+    public func refresh() { apply(Self.readIdentities()) }
+
+    public func apply(_ reading: Reading) {
+        // Change alerts need a live service handle, which the background
+        // read cannot hand over. Look one up only for a candidate not yet
+        // registered, so the steady tick does no extra IOKit work.
+        for entryID in reading.stateCCEntryIDs where stateCCInterest.shouldRegister(entryID: entryID) {
+            guard let service = wcService(forEntryID: entryID) else { continue }
+            registerStateCCInterest(for: service, entryID: entryID)
+            IOObjectRelease(service)
+        }
+        // Prune interest handles for StateCC services no longer present.
+        // Same pattern as `AppleHPMInterfaceWatcher.apply(_:)`'s own prune:
+        // only kIOMatchedNotification/kIOTerminatedNotification are matching
+        // notifications here, so without this, stale io_object_t handles
+        // would accumulate without limit across plug/unplug cycles. A node
+        // that is merely INACTIVE (still present, no current identity)
+        // stays in `stateCCEntryIDs` and keeps its handle; only a node
+        // genuinely gone from the registry is pruned here.
+        pruneStateCCInterest(liveEntryIDs: reading.stateCCEntryIDs)
+
+        if reading.identities != identities { identities = reading.identities }
+    }
+
+    /// The registry walk behind `refresh()`, with no notification
+    /// registration and no published state, so it can run off the main
+    /// thread.
+    nonisolated public static func readIdentities() -> Reading {
         // Build locally and assign once so subscribers never see a transient
         // empty list mid-refresh. See issue #227.
         var rebuilt: [USBPDSOP] = []
-        for className in Self.matchedClasses {
+        for className in matchedClasses {
             var iter: io_iterator_t = 0
             if IOServiceGetMatchingServices(kIOMainPortDefault,
                 IOServiceMatching(className), &iter) == KERN_SUCCESS {
@@ -198,7 +239,8 @@ public final class USBPDSOPWatcher: ObservableObject {
         // (issue #573 design review: "refresh() remains the backstop"), and
         // also where a candidate found only here (e.g. the very first
         // refresh, before any interest notification has fired even once)
-        // still gets registered, idempotently. `processStateCCService`
+        // still gets registered, idempotently (by the apply, from
+        // `stateCCEntryIDs`). `readStateCCService`
         // returns nil for a non-candidate (USB-C StateCC), so those never
         // touch `liveStateCCEntryIDs`, never get an interest registration,
         // and never contribute an identity.
@@ -207,7 +249,7 @@ public final class USBPDSOPWatcher: ObservableObject {
         if IOServiceGetMatchingServices(kIOMainPortDefault,
             IOServiceMatching(Self.stateCCClassName), &stateCCIter) == KERN_SUCCESS {
             defer { IOObjectRelease(stateCCIter) }
-            let found = wcDrainAllRetrying(stateCCIter) { service in processStateCCService(service) }
+            let found = wcDrainAllRetrying(stateCCIter) { service in readStateCCService(service) }
             for result in found {
                 guard let (entryID, identity) = result else { continue }
                 liveStateCCEntryIDs.insert(entryID)
@@ -215,21 +257,11 @@ public final class USBPDSOPWatcher: ObservableObject {
                 rebuilt.append(identity)
             }
         }
-        // Prune interest handles for StateCC services no longer present.
-        // Same pattern as `AppleHPMInterfaceWatcher.refresh()`'s own prune:
-        // only kIOMatchedNotification/kIOTerminatedNotification are matching
-        // notifications here, so without this, stale io_object_t handles
-        // would accumulate without limit across plug/unplug cycles. A node
-        // that is merely INACTIVE (still present, no current identity)
-        // stays in `liveStateCCEntryIDs` and keeps its handle; only a node
-        // genuinely gone from the registry is pruned here.
-        pruneStateCCInterest(liveEntryIDs: liveStateCCEntryIDs)
-
-        if rebuilt != identities { identities = rebuilt }
+        return Reading(identities: rebuilt, stateCCEntryIDs: liveStateCCEntryIDs)
     }
 
     private func handleAdded(_ iter: io_iterator_t) {
-        let found = wcDrainAllRetrying(iter) { service in makeIdentity(from: service) }
+        let found = wcDrainAllRetrying(iter) { service in Self.makeIdentity(from: service) }
         for identity in found {
             guard let identity, !identities.contains(where: { $0.id == identity.id }) else { continue }
             identities.append(identity)
@@ -257,7 +289,13 @@ public final class USBPDSOPWatcher: ObservableObject {
     /// same node never duplicates and a changed identity replaces rather
     /// than appends.
     private func handleStateCCAdded(_ iter: io_iterator_t) {
-        let found = wcDrainAllRetrying(iter) { service in processStateCCService(service) }
+        let found = wcDrainAllRetrying(iter) { service -> (entryID: UInt64, identity: USBPDSOP?)? in
+            guard let result = Self.readStateCCService(service) else { return nil }
+            // Registered here, with the service this drain already holds, so
+            // an already-inactive candidate is subscribed at launch.
+            registerStateCCInterest(for: service, entryID: result.entryID)
+            return result
+        }
         for result in found {
             guard let (entryID, identity) = result else { continue }
             identities = Self.reduceStateCCIdentities(identities, entryID: entryID, identity: identity)
@@ -338,13 +376,14 @@ public final class USBPDSOPWatcher: ObservableObject {
         stateCCInterest.handles
     }
 
-    /// One StateCC service, processed once: registers interest when it is a
-    /// MagSafe candidate (whatever its current `Active`/SOP1-key state), and
-    /// returns its entry ID plus whatever identity it currently emits (nil
-    /// when it doesn't). Returns nil outright for a non-candidate (USB-C
-    /// StateCC), so callers never register interest for one and never treat
-    /// it as live StateCC state.
-    private func processStateCCService(_ service: io_service_t) -> (entryID: UInt64, identity: USBPDSOP?)? {
+    /// One StateCC service, read once: for a MagSafe candidate (whatever its
+    /// current `Active`/SOP1-key state), returns its entry ID plus whatever
+    /// identity it currently emits (nil when it doesn't). Returns nil
+    /// outright for a non-candidate (USB-C StateCC), so callers never
+    /// register interest for one and never treat it as live StateCC state.
+    /// Registers nothing itself: the caller registers interest for the
+    /// returned entry ID.
+    nonisolated private static func readStateCCService(_ service: io_service_t) -> (entryID: UInt64, identity: USBPDSOP?)? {
         var entryID: UInt64 = 0
         guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else { return nil }
 
@@ -355,8 +394,6 @@ public final class USBPDSOPWatcher: ObservableObject {
         }
 
         guard Self.isStateCCMagSafeCandidate(read: read) else { return nil }
-
-        registerStateCCInterest(for: service, entryID: entryID)
 
         let uuid = wcHPMControllerUUID(for: service)
         let identity = Self.parseStateCCIdentity(entryID: entryID, read: read, hpmControllerUUID: uuid)
@@ -399,7 +436,7 @@ public final class USBPDSOPWatcher: ObservableObject {
         }
     }
 
-    private func makeIdentity(from service: io_service_t) -> USBPDSOP? {
+    nonisolated private static func makeIdentity(from service: io_service_t) -> USBPDSOP? {
         var entryID: UInt64 = 0
         guard IORegistryEntryGetRegistryEntryID(service, &entryID) == KERN_SUCCESS else { return nil }
 

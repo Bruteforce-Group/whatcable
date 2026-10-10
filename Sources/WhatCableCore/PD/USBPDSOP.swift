@@ -2,8 +2,8 @@ import Foundation
 
 /// Discover Identity response from a USB-PD endpoint, parsed from
 /// `IOPortTransportComponentCCUSBPDSOP` services.
-public struct USBPDSOP: Identifiable, Hashable {
-    public enum Endpoint: String {
+public struct USBPDSOP: Identifiable, Hashable, Sendable {
+    public enum Endpoint: String, Sendable {
         case sop = "SOP"        // Port partner (the connected device/charger)
         case sopPrime = "SOP'"  // Cable's near-side e-marker
         case sopDoublePrime = "SOP''" // Cable's far-side e-marker

@@ -1,7 +1,7 @@
 import Foundation
 
 /// One PDO (Power Data Object) advertised by the connected source.
-public struct PowerOption: Hashable {
+public struct PowerOption: Hashable, Sendable {
     /// Which kind of PDO this option came from.
     ///
     /// The charging-path resistance regression can only be attributed under a
@@ -158,7 +158,7 @@ public struct PowerOption: Hashable {
 /// A power source advertised on a USB-C / MagSafe port (parsed from
 /// `IOPortFeaturePowerSource`). One port may have multiple sources
 /// (e.g. "USB-PD" + "Brick ID").
-public struct PowerSource: Identifiable, Hashable {
+public struct PowerSource: Identifiable, Hashable, Sendable {
     public let id: UInt64
     public let name: String                // "USB-PD", "Brick ID"
     public let parentPortType: Int         // 0x2 = USB-C, 0x11 = MagSafe 3

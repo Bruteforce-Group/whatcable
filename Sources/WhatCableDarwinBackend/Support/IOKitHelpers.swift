@@ -336,3 +336,11 @@ public func wcHPMControllerProperty(for service: io_service_t, key: String) -> A
     }
     return nil
 }
+
+/// The live service for a registry entry ID, or nil when it is gone.
+/// The caller owns the returned handle and must release it.
+public func wcService(forEntryID entryID: UInt64) -> io_service_t? {
+    guard entryID != 0, let matching = IORegistryEntryIDMatching(entryID) else { return nil }
+    let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+    return service == 0 ? nil : service
+}
